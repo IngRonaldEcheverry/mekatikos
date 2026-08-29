@@ -353,7 +353,6 @@
   .toast.success { border-color: var(--success); color: var(--success); }
   .toast.error { border-color: var(--accent); color: var(--accent); }
   @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
   /* ===== ADMIN VIEW ===== */
   .admin-login {
@@ -867,16 +866,11 @@
           <div style="display:flex;flex-direction:column;gap:14px">
             <div class="form-group">
               <label>URL del Web App (Apps Script)</label>
-              <input type="url" id="cfgSheetUrl" placeholder="https://script.google.com/macros/s/...">
+              <input type="url" id="cfgSheetUrl" placeholder="https://script.google.com/macros/s/..." oninput="saveConfig()">
             </div>
-            <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px">
-              <div style="font-weight:600;font-size:0.88rem;margin-bottom:10px">🔑 Cambiar contraseña del admin</div>
-              <div style="display:flex;gap:10px;flex-wrap:wrap">
-                <input type="password" id="cfgNewPass" placeholder="Nueva contraseña"
-                  style="flex:1;min-width:160px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none">
-                <button class="btn btn-gold btn-sm" onclick="changeAdminPassword()">Actualizar</button>
-              </div>
-              <div style="font-size:0.75rem;color:var(--muted);margin-top:8px">La nueva contraseña se guarda como hash — nunca en texto plano.</div>
+            <div class="form-group">
+              <label>Contraseña de administrador</label>
+              <input type="password" id="cfgPassword" placeholder="Contraseña actual" oninput="saveConfig()">
             </div>
             <button class="btn btn-gold btn-sm" style="width:fit-content" onclick="testConnection()">🔗 Probar conexión</button>
           </div>
@@ -1022,101 +1016,32 @@
 
 <script>
 // =====================================================
-//  CONFIG
+//  CONFIG (persisted in localStorage)
 // =====================================================
-const SHEET_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbywKOU1XJTXy9Sr0UzSasnpAvtIX5a7cwCrdtxx6zgb59F41zr1Pcoza4je6I5cVMXR/exec';
-
-// ── REFUERZO 1: contraseña almacenada como hash SHA-256 ──
-// Nunca se guarda ni compara la clave en texto plano.
-// Para cambiar la clave: genera el nuevo hash con hashStr('nueva_clave')
-// y reemplaza el valor de ADMIN_HASH abajo.
-// Hash actual corresponde a: mekatikos2024
-const ADMIN_HASH = '7a3f2c1d8e4b9f6a0c5e2d7b4a8f1c3e9d6b2a5f8c1e4b7a0d3f6c9e2b5a8d1f';
-
-// ── REFUERZO 2: token secreto compartido con Apps Script ──
-// Este token se envía en cada POST. El Apps Script lo valida antes de escribir.
-// Si no coincide, rechaza la petición.
-const API_TOKEN = 'meka_' + btoa('mekatikos_secure_2024').replace(/=/g,'');
-
-async function hashStr(str) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
 let cfg = {
-  sheetUrl: SHEET_URL_DEFAULT,
-  adminHash: ADMIN_HASH
+  sheetUrl: '',
+  password: 'mekatikos2024'
 };
-
 function loadConfig() {
   const saved = localStorage.getItem('meka_cfg');
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      if (parsed.adminHash) cfg.adminHash = parsed.adminHash;
-    } catch {}
-  }
-  cfg.sheetUrl = SHEET_URL_DEFAULT;
+  if (saved) cfg = { ...cfg, ...JSON.parse(saved) };
   if (document.getElementById('cfgSheetUrl')) {
-    document.getElementById('cfgSheetUrl').value = cfg.sheetUrl;
+    document.getElementById('cfgSheetUrl').value = cfg.sheetUrl || '';
+    document.getElementById('cfgPassword').value = cfg.password || '';
   }
 }
-
 function saveConfig() {
-  localStorage.setItem('meka_cfg', JSON.stringify({ adminHash: cfg.adminHash }));
-}
-
-// Helper seguro para todos los POST — inyecta token automáticamente
-async function securePost(payload) {
-  return fetch(cfg.sheetUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...payload, _token: API_TOKEN }),
-    mode: 'no-cors'
-  });
-}
-
-
-const MAX_ATTEMPTS  = 5;
-const LOCKOUT_MS    = 5 * 60 * 1000; // 5 minutos
-
-function getLoginState() {
-  try {
-    return JSON.parse(localStorage.getItem('meka_login_state') || '{}');
-  } catch { return {}; }
-}
-function setLoginState(state) {
-  localStorage.setItem('meka_login_state', JSON.stringify(state));
-}
-function isLockedOut() {
-  const s = getLoginState();
-  if (!s.lockedUntil) return false;
-  if (Date.now() < s.lockedUntil) return true;
-  // Bloqueo expirado — limpiar
-  setLoginState({});
-  return false;
-}
-function recordFailedAttempt() {
-  const s = getLoginState();
-  const attempts = (s.attempts || 0) + 1;
-  if (attempts >= MAX_ATTEMPTS) {
-    setLoginState({ attempts, lockedUntil: Date.now() + LOCKOUT_MS });
-  } else {
-    setLoginState({ attempts });
-  }
-  return attempts;
-}
-function clearLoginAttempts() {
-  setLoginState({});
+  cfg.sheetUrl = document.getElementById('cfgSheetUrl')?.value || cfg.sheetUrl;
+  cfg.password = document.getElementById('cfgPassword')?.value || cfg.password;
+  localStorage.setItem('meka_cfg', JSON.stringify(cfg));
 }
 
 // =====================================================
 //  STATE
 // =====================================================
-let cart = {};
+let cart = {}; // { productName: { qty, price, emoji } }
 let products = [];
 let orders = [];
-let credits = [];
 let selectedPay = 'Efectivo';
 let pollingInterval = null;
 let lastOrderCount = 0;
@@ -1143,41 +1068,18 @@ function showAdmin() {
     refreshAll();
   }
 }
-
-async function checkAdmin() {
-  const input = document.getElementById('adminPassInput');
-  const val = input.value;
-
-  // Verificar bloqueo
-  if (isLockedOut()) {
-    const s = getLoginState();
-    const mins = Math.ceil((s.lockedUntil - Date.now()) / 60000);
-    toast(`🔒 Demasiados intentos. Espera ${mins} min.`, 'error');
-    input.value = '';
-    return;
-  }
-
-  // Hashear lo que escribió y comparar
-  const inputHash = await hashStr(val);
-  if (inputHash === cfg.adminHash) {
-    clearLoginAttempts();
+function checkAdmin() {
+  const val = document.getElementById('adminPassInput').value;
+  if (val === cfg.password) {
     adminLoggedIn = true;
     document.getElementById('adminLogin').style.display = 'none';
     document.getElementById('adminPanel').style.display = 'block';
     refreshAll();
     startPolling();
   } else {
-    const attempts = recordFailedAttempt();
-    const remaining = MAX_ATTEMPTS - attempts;
-    if (remaining <= 0) {
-      toast(`🔒 Cuenta bloqueada por 5 minutos`, 'error');
-    } else {
-      toast(`Contraseña incorrecta — ${remaining} intento${remaining !== 1 ? 's' : ''} restante${remaining !== 1 ? 's' : ''}`, 'error');
-    }
-    input.value = '';
+    toast('Contraseña incorrecta', 'error');
   }
 }
-
 function logoutAdmin() {
   adminLoggedIn = false;
   stopPolling();
@@ -1350,13 +1252,20 @@ async function submitQuickSale() {
   };
   try {
     if (cfg.sheetUrl) {
-      await securePost(payload);
+      await fetch(cfg.sheetUrl, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload), mode:'no-cors'
+      });
       await new Promise(r => setTimeout(r, 1400));
       const ordersRes = await fetch(cfg.sheetUrl + '?action=getOrders');
       const allOrders = await ordersRes.json();
       const newest = allOrders.find(o => o.cliente === '— Admin —' && o.estado !== 'Entregado');
       if (newest) {
-        await securePost({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) });
+        await fetch(cfg.sheetUrl, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) }),
+          mode:'no-cors'
+        });
       }
     } else {
       const demo = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]');
@@ -1374,7 +1283,6 @@ async function submitQuickSale() {
     qsCart = {};
     document.getElementById('qsPaga').value = '';
     document.getElementById('qsDevuelto').style.display = 'none';
-    invalidateProductCache();
     await loadProducts();
     renderQuickSaleGrid();
     await loadOrders();
@@ -1399,9 +1307,6 @@ const SS_ID = 'TU_SPREADSHEET_ID_AQUÍ'; // Reemplaza con el ID de tu Sheet
 const SHEET_PROD   = 'Productos';
 const SHEET_ORDERS = 'Pedidos';
 const SHEET_CRED   = 'Creditos';
-
-// ── Token de seguridad — debe coincidir con API_TOKEN en el HTML ──
-const VALID_TOKEN  = 'meka_bWVrYXRpa29zX3NlY3VyZV8yMDI0';
 
 function doGet(e) {
   const action = e.parameter.action;
@@ -1471,12 +1376,6 @@ function doGet(e) {
 
 function doPost(e) {
   const body = JSON.parse(e.postData.contents);
-
-  // ── Validar token de seguridad ──
-  if (body._token !== VALID_TOKEN) {
-    return output({ error: 'No autorizado' });
-  }
-
   const ss = SpreadsheetApp.openById(SS_ID);
 
   if (body.action === 'newOrder') {
@@ -1538,19 +1437,7 @@ function output(data) {
   document.getElementById('scriptArea').value = script;
 }
 
-async function changeAdminPassword() {
-  const newPass = document.getElementById('cfgNewPass').value.trim();
-  if (!newPass || newPass.length < 6) {
-    toast('La contraseña debe tener al menos 6 caracteres', 'error'); return;
-  }
-  const newHash = await hashStr(newPass);
-  cfg.adminHash = newHash;
-  saveConfig();
-  document.getElementById('cfgNewPass').value = '';
-  toast('✅ Contraseña actualizada correctamente', 'success');
-}
-
-
+function copyScript() {
   const ta = document.getElementById('scriptArea');
   ta.select();
   document.execCommand('copy');
@@ -1576,81 +1463,29 @@ const DEMO_PRODUCTS = [
 // =====================================================
 //  LOAD PRODUCTS
 // =====================================================
-// =====================================================
-//  CACHE CONFIG
-// =====================================================
-const CACHE_KEY_PRODUCTS = 'meka_cache_products';
-const CACHE_KEY_TS       = 'meka_cache_ts';
-const CACHE_TTL_MS       = 5 * 60 * 1000; // 5 minutos
-
-function getCachedProducts() {
-  try {
-    const ts = parseInt(localStorage.getItem(CACHE_KEY_TS) || '0');
-    if (Date.now() - ts > CACHE_TTL_MS) return null; // expirado
-    const raw = localStorage.getItem(CACHE_KEY_PRODUCTS);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
-function setCachedProducts(data) {
-  try {
-    localStorage.setItem(CACHE_KEY_PRODUCTS, JSON.stringify(data));
-    localStorage.setItem(CACHE_KEY_TS, String(Date.now()));
-  } catch {}
-}
-
-function invalidateProductCache() {
-  localStorage.removeItem(CACHE_KEY_PRODUCTS);
-  localStorage.removeItem(CACHE_KEY_TS);
-}
-
-// =====================================================
-//  SKELETON LOADER
-// =====================================================
-function showProductSkeleton() {
-  const grid = document.getElementById('productsGrid');
-  grid.innerHTML = Array(8).fill(0).map(() => `
-    <div class="product-card" style="pointer-events:none">
-      <div style="width:100px;height:100px;border-radius:12px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite"></div>
-      <div style="width:80%;height:14px;border-radius:6px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;margin-top:4px"></div>
-      <div style="width:50%;height:18px;border-radius:6px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite"></div>
-      <div style="width:70%;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite"></div>
-    </div>`).join('');
-}
-
 async function loadProducts() {
-  // 1 — mostrar caché inmediatamente si existe
-  const cached = getCachedProducts();
-  if (cached && cached.length) {
-    products = cached;
+  const grid = document.getElementById('productsGrid');
+  
+  if (!cfg.sheetUrl) {
+    products = DEMO_PRODUCTS;
     buildCatTabs();
     renderProducts();
-    // Refrescar en segundo plano silenciosamente
-    fetchProductsBackground();
+    toast('Modo demo activo — configura tu Google Sheet en Admin ⚙️', 'success');
     return;
   }
-  // 2 — sin caché: mostrar skeleton y esperar
-  showProductSkeleton();
-  await fetchProductsBackground();
-}
 
-async function fetchProductsBackground(silent = false) {
   try {
-    const res = await fetch(cfg.sheetUrl + '?action=getProducts');
+    const url = cfg.sheetUrl + '?action=getProducts';
+    const res = await fetch(url);
     const data = await res.json();
-    if (Array.isArray(data) && data.length) {
-      const changed = JSON.stringify(data) !== JSON.stringify(products);
-      products = data;
-      setCachedProducts(data);
-      if (changed) { buildCatTabs(); renderProducts(); }
-    }
+    products = data;
+    buildCatTabs();
+    renderProducts();
   } catch (e) {
-    if (!products.length) {
-      products = DEMO_PRODUCTS;
-      buildCatTabs();
-      renderProducts();
-      toast('No se pudo conectar al Sheet', 'error');
-    }
+    products = DEMO_PRODUCTS;
+    buildCatTabs();
+    renderProducts();
+    toast('No se pudo conectar al Sheet — mostrando demo', 'error');
   }
 }
 
@@ -1995,12 +1830,25 @@ async function submitOrder() {
 
   try {
     if (cfg.sheetUrl) {
-      await securePost(payload);
+      await fetch(cfg.sheetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        mode: 'no-cors'
+      });
+      // Si es fiado, también registrar en Creditos
       if (selectedPay === 'Fiar') {
-        await securePost({
-          action: 'newCredito',
-          cliente: name, piso, area,
-          tipo: 'Pedido', monto: total, nota: productosStr
+        await fetch(cfg.sheetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'newCredito',
+            cliente: name, piso, area,
+            tipo: 'Pedido',
+            monto: total,
+            nota: productosStr
+          }),
+          mode: 'no-cors'
         });
       }
     } else {
@@ -2053,16 +1901,10 @@ async function loadOrders() {
   if (!adminLoggedIn) return;
   try {
     if (cfg.sheetUrl) {
-      // Fetch pedidos y créditos en paralelo — mucho más rápido
-      const [ordersRes, creditsRes] = await Promise.all([
-        fetch(cfg.sheetUrl + '?action=getOrders'),
-        fetch(cfg.sheetUrl + '?action=getCreditos')
-      ]);
-      orders  = await ordersRes.json();
-      credits = await creditsRes.json();
+      const res = await fetch(cfg.sheetUrl + '?action=getOrders');
+      orders = await res.json();
     } else {
-      orders  = JSON.parse(localStorage.getItem('meka_demo_orders')  || '[]').reverse();
-      credits = JSON.parse(localStorage.getItem('meka_demo_credits') || '[]');
+      orders = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]').reverse();
     }
     renderOrders();
     updateStats();
@@ -2113,7 +1955,12 @@ async function markDelivered(row, productosEncoded) {
 
   try {
     if (cfg.sheetUrl) {
-      await securePost({ action: 'updateStatus', row, status: 'Entregado', items: JSON.stringify(items) });
+      await fetch(cfg.sheetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateStatus', row, status: 'Entregado', items: JSON.stringify(items) }),
+        mode: 'no-cors'
+      });
     } else {
       // Demo mode
       const demo = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]');
@@ -2129,7 +1976,6 @@ async function markDelivered(row, productosEncoded) {
       localStorage.setItem('meka_demo_prods', JSON.stringify(demoProds));
     }
     toast('✅ Pedido marcado como entregado', 'success');
-    invalidateProductCache(); // stock cambió — próxima carga trae datos frescos
     await loadOrders();
     if (cfg.sheetUrl) await loadProducts(); else {
       const saved = JSON.parse(localStorage.getItem('meka_demo_prods') || 'null');
@@ -2201,10 +2047,11 @@ let activeCreditClient = null;
 async function loadCredits() {
   if (!adminLoggedIn) return;
   try {
-    // Si loadOrders ya trajo los créditos en paralelo, usarlos directamente
-    if (!credits.length) {
+    if (cfg.sheetUrl) {
       const res = await fetch(cfg.sheetUrl + '?action=getCreditos');
       credits = await res.json();
+    } else {
+      credits = JSON.parse(localStorage.getItem('meka_demo_credits') || '[]');
     }
     renderCreditGrid();
     updateCreditStats();
@@ -2323,7 +2170,10 @@ async function submitAbono() {
 
   try {
     if (cfg.sheetUrl) {
-      await securePost(payload);
+      await fetch(cfg.sheetUrl, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload), mode: 'no-cors'
+      });
     } else {
       const creds = JSON.parse(localStorage.getItem('meka_demo_credits') || '[]');
       creds.push({ ...payload, timestamp: new Date().toLocaleString('es-CO') });
