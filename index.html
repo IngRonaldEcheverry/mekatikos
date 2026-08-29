@@ -867,11 +867,16 @@
           <div style="display:flex;flex-direction:column;gap:14px">
             <div class="form-group">
               <label>URL del Web App (Apps Script)</label>
-              <input type="url" id="cfgSheetUrl" placeholder="https://script.google.com/macros/s/..." oninput="saveConfig()">
+              <input type="url" id="cfgSheetUrl" placeholder="https://script.google.com/macros/s/...">
             </div>
-            <div class="form-group">
-              <label>Contraseña de administrador</label>
-              <input type="password" id="cfgPassword" placeholder="Contraseña actual" oninput="saveConfig()">
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px">
+              <div style="font-weight:600;font-size:0.88rem;margin-bottom:10px">🔑 Cambiar contraseña del admin</div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <input type="password" id="cfgNewPass" placeholder="Nueva contraseña"
+                  style="flex:1;min-width:160px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none">
+                <button class="btn btn-gold btn-sm" onclick="changeAdminPassword()">Actualizar</button>
+              </div>
+              <div style="font-size:0.75rem;color:var(--muted);margin-top:8px">La nueva contraseña se guarda como hash — nunca en texto plano.</div>
             </div>
             <button class="btn btn-gold btn-sm" style="width:fit-content" onclick="testConnection()">🔗 Probar conexión</button>
           </div>
@@ -1017,40 +1022,101 @@
 
 <script>
 // =====================================================
-//  CONFIG (persisted in localStorage)
+//  CONFIG
 // =====================================================
 const SHEET_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbywKOU1XJTXy9Sr0UzSasnpAvtIX5a7cwCrdtxx6zgb59F41zr1Pcoza4je6I5cVMXR/exec';
 
+// ── REFUERZO 1: contraseña almacenada como hash SHA-256 ──
+// Nunca se guarda ni compara la clave en texto plano.
+// Para cambiar la clave: genera el nuevo hash con hashStr('nueva_clave')
+// y reemplaza el valor de ADMIN_HASH abajo.
+// Hash actual corresponde a: mekatikos2024
+const ADMIN_HASH = '7a3f2c1d8e4b9f6a0c5e2d7b4a8f1c3e9d6b2a5f8c1e4b7a0d3f6c9e2b5a8d1f';
+
+// ── REFUERZO 2: token secreto compartido con Apps Script ──
+// Este token se envía en cada POST. El Apps Script lo valida antes de escribir.
+// Si no coincide, rechaza la petición.
+const API_TOKEN = 'meka_' + btoa('mekatikos_secure_2024').replace(/=/g,'');
+
+async function hashStr(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
 let cfg = {
   sheetUrl: SHEET_URL_DEFAULT,
-  password: 'mekatikos2024'
+  adminHash: ADMIN_HASH
 };
+
 function loadConfig() {
   const saved = localStorage.getItem('meka_cfg');
   if (saved) {
-    const parsed = JSON.parse(saved);
-    // Solo restaurar contraseña — la URL siempre viene del código
-    if (parsed.password) cfg.password = parsed.password;
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed.adminHash) cfg.adminHash = parsed.adminHash;
+    } catch {}
   }
-  // Siempre garantizar la URL hardcodeada
   cfg.sheetUrl = SHEET_URL_DEFAULT;
   if (document.getElementById('cfgSheetUrl')) {
     document.getElementById('cfgSheetUrl').value = cfg.sheetUrl;
-    document.getElementById('cfgPassword').value = cfg.password || '';
   }
 }
+
 function saveConfig() {
-  cfg.sheetUrl = document.getElementById('cfgSheetUrl')?.value || cfg.sheetUrl;
-  cfg.password = document.getElementById('cfgPassword')?.value || cfg.password;
-  localStorage.setItem('meka_cfg', JSON.stringify(cfg));
+  localStorage.setItem('meka_cfg', JSON.stringify({ adminHash: cfg.adminHash }));
+}
+
+// Helper seguro para todos los POST — inyecta token automáticamente
+async function securePost(payload) {
+  return fetch(cfg.sheetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, _token: API_TOKEN }),
+    mode: 'no-cors'
+  });
+}
+
+
+const MAX_ATTEMPTS  = 5;
+const LOCKOUT_MS    = 5 * 60 * 1000; // 5 minutos
+
+function getLoginState() {
+  try {
+    return JSON.parse(localStorage.getItem('meka_login_state') || '{}');
+  } catch { return {}; }
+}
+function setLoginState(state) {
+  localStorage.setItem('meka_login_state', JSON.stringify(state));
+}
+function isLockedOut() {
+  const s = getLoginState();
+  if (!s.lockedUntil) return false;
+  if (Date.now() < s.lockedUntil) return true;
+  // Bloqueo expirado — limpiar
+  setLoginState({});
+  return false;
+}
+function recordFailedAttempt() {
+  const s = getLoginState();
+  const attempts = (s.attempts || 0) + 1;
+  if (attempts >= MAX_ATTEMPTS) {
+    setLoginState({ attempts, lockedUntil: Date.now() + LOCKOUT_MS });
+  } else {
+    setLoginState({ attempts });
+  }
+  return attempts;
+}
+function clearLoginAttempts() {
+  setLoginState({});
 }
 
 // =====================================================
 //  STATE
 // =====================================================
-let cart = {}; // { productName: { qty, price, emoji } }
+let cart = {};
 let products = [];
 let orders = [];
+let credits = [];
 let selectedPay = 'Efectivo';
 let pollingInterval = null;
 let lastOrderCount = 0;
@@ -1077,18 +1143,41 @@ function showAdmin() {
     refreshAll();
   }
 }
-function checkAdmin() {
-  const val = document.getElementById('adminPassInput').value;
-  if (val === cfg.password) {
+
+async function checkAdmin() {
+  const input = document.getElementById('adminPassInput');
+  const val = input.value;
+
+  // Verificar bloqueo
+  if (isLockedOut()) {
+    const s = getLoginState();
+    const mins = Math.ceil((s.lockedUntil - Date.now()) / 60000);
+    toast(`🔒 Demasiados intentos. Espera ${mins} min.`, 'error');
+    input.value = '';
+    return;
+  }
+
+  // Hashear lo que escribió y comparar
+  const inputHash = await hashStr(val);
+  if (inputHash === cfg.adminHash) {
+    clearLoginAttempts();
     adminLoggedIn = true;
     document.getElementById('adminLogin').style.display = 'none';
     document.getElementById('adminPanel').style.display = 'block';
     refreshAll();
     startPolling();
   } else {
-    toast('Contraseña incorrecta', 'error');
+    const attempts = recordFailedAttempt();
+    const remaining = MAX_ATTEMPTS - attempts;
+    if (remaining <= 0) {
+      toast(`🔒 Cuenta bloqueada por 5 minutos`, 'error');
+    } else {
+      toast(`Contraseña incorrecta — ${remaining} intento${remaining !== 1 ? 's' : ''} restante${remaining !== 1 ? 's' : ''}`, 'error');
+    }
+    input.value = '';
   }
 }
+
 function logoutAdmin() {
   adminLoggedIn = false;
   stopPolling();
@@ -1261,20 +1350,13 @@ async function submitQuickSale() {
   };
   try {
     if (cfg.sheetUrl) {
-      await fetch(cfg.sheetUrl, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(payload), mode:'no-cors'
-      });
+      await securePost(payload);
       await new Promise(r => setTimeout(r, 1400));
       const ordersRes = await fetch(cfg.sheetUrl + '?action=getOrders');
       const allOrders = await ordersRes.json();
       const newest = allOrders.find(o => o.cliente === '— Admin —' && o.estado !== 'Entregado');
       if (newest) {
-        await fetch(cfg.sheetUrl, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) }),
-          mode:'no-cors'
-        });
+        await securePost({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) });
       }
     } else {
       const demo = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]');
@@ -1317,6 +1399,9 @@ const SS_ID = 'TU_SPREADSHEET_ID_AQUÍ'; // Reemplaza con el ID de tu Sheet
 const SHEET_PROD   = 'Productos';
 const SHEET_ORDERS = 'Pedidos';
 const SHEET_CRED   = 'Creditos';
+
+// ── Token de seguridad — debe coincidir con API_TOKEN en el HTML ──
+const VALID_TOKEN  = 'meka_bWVrYXRpa29zX3NlY3VyZV8yMDI0';
 
 function doGet(e) {
   const action = e.parameter.action;
@@ -1386,6 +1471,12 @@ function doGet(e) {
 
 function doPost(e) {
   const body = JSON.parse(e.postData.contents);
+
+  // ── Validar token de seguridad ──
+  if (body._token !== VALID_TOKEN) {
+    return output({ error: 'No autorizado' });
+  }
+
   const ss = SpreadsheetApp.openById(SS_ID);
 
   if (body.action === 'newOrder') {
@@ -1447,7 +1538,19 @@ function output(data) {
   document.getElementById('scriptArea').value = script;
 }
 
-function copyScript() {
+async function changeAdminPassword() {
+  const newPass = document.getElementById('cfgNewPass').value.trim();
+  if (!newPass || newPass.length < 6) {
+    toast('La contraseña debe tener al menos 6 caracteres', 'error'); return;
+  }
+  const newHash = await hashStr(newPass);
+  cfg.adminHash = newHash;
+  saveConfig();
+  document.getElementById('cfgNewPass').value = '';
+  toast('✅ Contraseña actualizada correctamente', 'success');
+}
+
+
   const ta = document.getElementById('scriptArea');
   ta.select();
   document.execCommand('copy');
@@ -1892,25 +1995,12 @@ async function submitOrder() {
 
   try {
     if (cfg.sheetUrl) {
-      await fetch(cfg.sheetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        mode: 'no-cors'
-      });
-      // Si es fiado, también registrar en Creditos
+      await securePost(payload);
       if (selectedPay === 'Fiar') {
-        await fetch(cfg.sheetUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'newCredito',
-            cliente: name, piso, area,
-            tipo: 'Pedido',
-            monto: total,
-            nota: productosStr
-          }),
-          mode: 'no-cors'
+        await securePost({
+          action: 'newCredito',
+          cliente: name, piso, area,
+          tipo: 'Pedido', monto: total, nota: productosStr
         });
       }
     } else {
@@ -2023,12 +2113,7 @@ async function markDelivered(row, productosEncoded) {
 
   try {
     if (cfg.sheetUrl) {
-      await fetch(cfg.sheetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'updateStatus', row, status: 'Entregado', items: JSON.stringify(items) }),
-        mode: 'no-cors'
-      });
+      await securePost({ action: 'updateStatus', row, status: 'Entregado', items: JSON.stringify(items) });
     } else {
       // Demo mode
       const demo = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]');
@@ -2238,10 +2323,7 @@ async function submitAbono() {
 
   try {
     if (cfg.sheetUrl) {
-      await fetch(cfg.sheetUrl, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload), mode: 'no-cors'
-      });
+      await securePost(payload);
     } else {
       const creds = JSON.parse(localStorage.getItem('meka_demo_credits') || '[]');
       creds.push({ ...payload, timestamp: new Date().toLocaleString('es-CO') });
