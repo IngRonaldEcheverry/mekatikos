@@ -750,9 +750,19 @@
             <div class="qs-pay-row">
               <button class="qs-pay-opt selected" id="qsPayEfectivo" onclick="qsSelectPay('Efectivo')">💵 Efectivo</button>
               <button class="qs-pay-opt" id="qsPayTransferencia" onclick="qsSelectPay('Transferencia')">📲 Transferencia</button>
+              <button class="qs-pay-opt" id="qsPayFiar" onclick="qsSelectPay('Fiar')"
+                style="border-color:#9b59b6;color:#9b59b6">📒 Fiar</button>
               <input type="number" class="qs-change-input" id="qsPaga" placeholder="Paga con..."
                 oninput="qsCalcChange()" min="0" style="display:none">
               <span class="qs-devuelto" id="qsDevuelto" style="display:none"></span>
+            </div>
+            <!-- Dropdown fiado — solo visible cuando se elige Fiar -->
+            <div id="qsFiadoWrap" style="display:none;width:100%">
+              <select id="qsFiadoSelect" onchange="qsAutoFillFiado(this.value)"
+                style="width:100%;background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath d=%27M1 1l5 5 5-5%27 stroke=%279b59b6%27 stroke-width=%271.5%27 fill=%27none%27 stroke-linecap=%27round%27/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;cursor:pointer">
+                <option value="">— Selecciona cliente autorizado —</option>
+                ${FIADOS ? FIADOS.map(f => `<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('') : ''}
+              </select>
             </div>
             <button class="btn btn-gold" id="qsConfirmBtn" onclick="submitQuickSale()" disabled
               style="padding:10px 24px;border-radius:50px;font-size:0.9rem">
@@ -1294,12 +1304,27 @@ function qsSelectPay(method) {
   qsPayMethod = method;
   document.getElementById('qsPayEfectivo').classList.toggle('selected', method === 'Efectivo');
   document.getElementById('qsPayTransferencia').classList.toggle('selected', method === 'Transferencia');
-  const pagaInput = document.getElementById('qsPaga');
-  const devuelto  = document.getElementById('qsDevuelto');
+  document.getElementById('qsPayFiar').classList.toggle('selected', method === 'Fiar');
+  const fiarBtn = document.getElementById('qsPayFiar');
+  fiarBtn.style.background = method === 'Fiar' ? 'rgba(155,89,182,0.15)' : '';
+  fiarBtn.style.color      = method === 'Fiar' ? '#9b59b6' : '';
+
+  const pagaInput  = document.getElementById('qsPaga');
+  const devuelto   = document.getElementById('qsDevuelto');
+  const fiadoWrap  = document.getElementById('qsFiadoWrap');
+
   pagaInput.style.display = method === 'Efectivo' ? 'block' : 'none';
-  if (method !== 'Efectivo') devuelto.style.display = 'none';
-  else qsCalcChange();
+  fiadoWrap.style.display = method === 'Fiar'     ? 'block' : 'none';
+  if (method !== 'Efectivo') { devuelto.style.display = 'none'; }
+  if (method === 'Efectivo') qsCalcChange();
+  // Limpiar selección fiado al cambiar de método
+  if (method !== 'Fiar') document.getElementById('qsFiadoSelect').value = '';
 }
+
+function qsAutoFillFiado(nombre) {
+  // Solo actualiza internamente — el nombre se usará en submitQuickSale
+}
+
 function qsCalcChange() {
   const total = Object.entries(qsCart).reduce((s,[n,qty]) => {
     const p = products.find(x => x.nombre === n);
@@ -1334,46 +1359,93 @@ function updateQsSummary() {
 async function submitQuickSale() {
   const entries = Object.entries(qsCart);
   if (!entries.length) return;
+
+  // Validar cliente fiado si aplica
+  if (qsPayMethod === 'Fiar') {
+    const fiadoNombre = document.getElementById('qsFiadoSelect').value;
+    if (!fiadoNombre) { toast('Selecciona el cliente que fía 📒', 'error'); return; }
+  }
+
   const items = entries.map(([n,qty]) => ({ nombre:n, qty }));
   const productosStr = items.map(i => `${i.nombre} x${i.qty}`).join(', ');
   const total = entries.reduce((s,[n,q]) => {
     const p = products.find(x => x.nombre === n);
     return s + (p ? Number(p.precio)*q : 0);
   }, 0);
+
+  const esFiado = qsPayMethod === 'Fiar';
+  const fiadoNombre = esFiado ? document.getElementById('qsFiadoSelect').value : '';
+  const fiadoData   = esFiado ? FIADOS.find(f => f.nombre === fiadoNombre) : null;
+
+  const clienteLabel = esFiado ? fiadoNombre : '— Admin —';
+  const pisoLabel    = esFiado && fiadoData ? fiadoData.piso : '—';
+  const areaLabel    = esFiado && fiadoData ? fiadoData.area : '—';
+  const pagoLabel    = esFiado ? 'Fiar / Crédito' : qsPayMethod;
+
   const btn = document.getElementById('qsConfirmBtn');
   btn.textContent = '⏳ Procesando...'; btn.disabled = true;
+
   const payload = {
     action: 'newOrder',
-    cliente: '— Admin —', piso: '—', area: '—',
-    productos: productosStr, total, pago: qsPayMethod,
-    autoEntregado: true
+    cliente: clienteLabel, piso: pisoLabel, area: areaLabel,
+    productos: productosStr, total, pago: pagoLabel,
+    autoEntregado: !esFiado  // fiado NO se auto-entrega — queda como Pedido
   };
+
   try {
     if (cfg.sheetUrl) {
       await securePost(payload);
-      await new Promise(r => setTimeout(r, 1400));
-      const ordersRes = await fetch(cfg.sheetUrl + '?action=getOrders');
-      const allOrders = await ordersRes.json();
-      const newest = allOrders.find(o => o.cliente === '— Admin —' && o.estado !== 'Entregado');
-      if (newest) {
-        await securePost({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) });
+
+      if (!esFiado) {
+        // Venta normal — marcar entregado y descontar stock
+        await new Promise(r => setTimeout(r, 1400));
+        const ordersRes = await fetch(cfg.sheetUrl + '?action=getOrders');
+        const allOrders = await ordersRes.json();
+        const newest = allOrders.find(o => o.cliente === '— Admin —' && o.estado !== 'Entregado');
+        if (newest) {
+          await securePost({ action:'updateStatus', row:newest._row, status:'Entregado', items:JSON.stringify(items) });
+        }
+      } else {
+        // Fiado — registrar en Créditos
+        await securePost({
+          action: 'newCredito',
+          cliente: fiadoNombre, piso: pisoLabel, area: areaLabel,
+          tipo: 'Pedido', monto: total, nota: productosStr
+        });
       }
     } else {
+      // Demo
       const demo = JSON.parse(localStorage.getItem('meka_demo_orders') || '[]');
-      demo.push({ ...payload, _row:demo.length+2, timestamp:new Date().toLocaleString('es-CO'), estado:'Entregado' });
+      demo.push({ ...payload, _row:demo.length+2, timestamp:new Date().toLocaleString('es-CO'), estado: esFiado ? 'Pedido' : 'Entregado' });
       localStorage.setItem('meka_demo_orders', JSON.stringify(demo));
-      const demoProds = JSON.parse(localStorage.getItem('meka_demo_prods') || 'null') || [...products];
-      items.forEach(item => {
-        const p = demoProds.find(x => x.nombre === item.nombre);
-        if (p) p.stock = Math.max(0, p.stock - item.qty);
-      });
-      localStorage.setItem('meka_demo_prods', JSON.stringify(demoProds));
-      products = demoProds;
+      if (!esFiado) {
+        const demoProds = JSON.parse(localStorage.getItem('meka_demo_prods') || 'null') || [...products];
+        items.forEach(item => {
+          const p = demoProds.find(x => x.nombre === item.nombre);
+          if (p) p.stock = Math.max(0, p.stock - item.qty);
+        });
+        localStorage.setItem('meka_demo_prods', JSON.stringify(demoProds));
+        products = demoProds;
+      } else {
+        const creds = JSON.parse(localStorage.getItem('meka_demo_credits') || '[]');
+        creds.push({ cliente: fiadoNombre, piso: pisoLabel, area: areaLabel, tipo: 'Pedido', monto: total, nota: productosStr, timestamp: new Date().toLocaleString('es-CO') });
+        localStorage.setItem('meka_demo_credits', JSON.stringify(creds));
+      }
     }
-    toast(`⚡ Venta registrada — ${fmtPrice(total)}`, 'success');
+
+    const msg = esFiado
+      ? `📒 Fiado registrado para ${fiadoNombre} — ${fmtPrice(total)}`
+      : `⚡ Venta registrada — ${fmtPrice(total)}`;
+    toast(msg, 'success');
+
     qsCart = {};
     document.getElementById('qsPaga').value = '';
     document.getElementById('qsDevuelto').style.display = 'none';
+    document.getElementById('qsFiadoSelect').value = '';
+    document.getElementById('qsFiadoWrap').style.display = 'none';
+    qsPayMethod = 'Efectivo';
+    qsSelectPay('Efectivo');
+
     invalidateProductCache();
     await loadProducts();
     renderQuickSaleGrid();
