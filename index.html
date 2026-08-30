@@ -759,10 +759,9 @@
             </div>
             <!-- Dropdown fiado — solo visible cuando se elige Fiar -->
             <div id="qsFiadoWrap" style="display:none;width:100%">
-              <select id="qsFiadoSelect" onchange="qsAutoFillFiado(this.value)"
+              <select id="qsFiadoSelect"
                 style="width:100%;background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%278%27 viewBox=%270 0 12 8%27%3E%3Cpath d=%27M1 1l5 5 5-5%27 stroke=%279b59b6%27 stroke-width=%271.5%27 fill=%27none%27 stroke-linecap=%27round%27/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;cursor:pointer">
                 <option value="">— Selecciona cliente autorizado —</option>
-                ${FIADOS ? FIADOS.map(f => `<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('') : ''}
               </select>
             </div>
             <button class="btn btn-gold" id="qsConfirmBtn" onclick="submitQuickSale()" disabled
@@ -1310,20 +1309,23 @@ function qsSelectPay(method) {
   fiarBtn.style.background = method === 'Fiar' ? 'rgba(155,89,182,0.15)' : '';
   fiarBtn.style.color      = method === 'Fiar' ? '#9b59b6' : '';
 
-  const pagaInput  = document.getElementById('qsPaga');
-  const devuelto   = document.getElementById('qsDevuelto');
-  const fiadoWrap  = document.getElementById('qsFiadoWrap');
+  const pagaInput = document.getElementById('qsPaga');
+  const devuelto  = document.getElementById('qsDevuelto');
+  const fiadoWrap = document.getElementById('qsFiadoWrap');
 
   pagaInput.style.display = method === 'Efectivo' ? 'block' : 'none';
   fiadoWrap.style.display = method === 'Fiar'     ? 'block' : 'none';
   if (method !== 'Efectivo') { devuelto.style.display = 'none'; }
   if (method === 'Efectivo') qsCalcChange();
-  // Limpiar selección fiado al cambiar de método
-  if (method !== 'Fiar') document.getElementById('qsFiadoSelect').value = '';
-}
 
-function qsAutoFillFiado(nombre) {
-  // Solo actualiza internamente — el nombre se usará en submitQuickSale
+  // Poblar dropdown de fiados dinámicamente cuando se abre
+  if (method === 'Fiar') {
+    const sel = document.getElementById('qsFiadoSelect');
+    sel.innerHTML = '<option value="">— Selecciona cliente autorizado —</option>' +
+      FIADOS.map(f => `<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('');
+  } else {
+    document.getElementById('qsFiadoSelect').value = '';
+  }
 }
 
 function qsCalcChange() {
