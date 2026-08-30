@@ -1551,6 +1551,7 @@ async function changeAdminPassword() {
 }
 
 
+function copyScript() {
   const ta = document.getElementById('scriptArea');
   ta.select();
   document.execCommand('copy');
@@ -2195,7 +2196,6 @@ async function refreshAll() {
 // =====================================================
 //  CREDITS MODULE
 // =====================================================
-let credits = [];
 let activeCreditClient = null;
 
 async function loadCredits() {
