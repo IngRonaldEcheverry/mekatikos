@@ -3,9 +3,910 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mekatikos </title>
+<title>Mekatikos 🍬</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍬</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- ═══════════════════════════════════════════════
+     FIREBASE SDK  (reemplaza al Apps Script)
+     Módulos ESM — carga solo lo que se usa
+════════════════════════════════════════════════ -->
+<script type="module">
+
+// ─── 1. CONFIGURACIÓN FIREBASE ───────────────────
+// Reemplaza estos valores con los de TU proyecto Firebase
+// Los encuentras en: Firebase Console → Configuración → Agregar app web
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import {
+  getFirestore, collection, doc,
+  getDocs, addDoc, updateDoc, onSnapshot,
+  query, orderBy, serverTimestamp, where
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyBOkKLhl7OolntZKIq7K0YnXqQNKpcv850",
+  authDomain:        "mekatikos-c5fe6.firebaseapp.com",
+  projectId:         "mekatikos-c5fe6",
+  storageBucket:     "mekatikos-c5fe6.firebasestorage.app",
+  messagingSenderId: "185880651638",
+  appId:             "1:185880651638:web:9bfc5c4b77c0edc7bdfc57"
+};
+
+const app  = initializeApp(firebaseConfig);
+const db   = getFirestore(app);
+const auth = getAuth(app);
+
+// ─── 2. COLECCIONES FIRESTORE ────────────────────
+// Equivalen a las hojas de tu Google Sheet:
+//   productos  ← hoja Productos
+//   pedidos    ← hoja Pedidos
+//   creditos   ← hoja Créditos
+const COL_PRODUCTOS = 'productos';
+const COL_PEDIDOS   = 'pedidos';
+const COL_CREDITOS  = 'creditos';
+
+// ─── 3. ESTADO GLOBAL ───────────────────────────
+let cart         = {};
+let products     = [];
+let orders       = [];
+let credits      = [];
+let selectedPay  = 'Efectivo';
+let adminLoggedIn = false;
+let searchQuery  = '';
+let activeCategory = 'Todos';
+let unsubOrders  = null;   // listener tiempo real pedidos
+let unsubCredits = null;   // listener tiempo real créditos
+let lastOrderCount = 0;
+
+// ─── 4. CONSTANTES ──────────────────────────────
+const CAT_CONFIG = { 'Dulces':'🍬', 'Galletas':'🍪', 'Mecato':'🥔' };
+
+const FIADOS = [
+  { nombre: 'Julián',         piso: '11', area: 'Observatorio' },
+  { nombre: 'Junior',         piso: '11', area: 'Observatorio' },
+  { nombre: 'Eduardo',        piso: '11', area: 'Observatorio' },
+  { nombre: 'Lucy',           piso: '11', area: 'Observatorio' },
+  { nombre: 'Katherine',      piso: '11', area: 'Observatorio' },
+  { nombre: 'Kattia',         piso: '11', area: 'Observatorio' },
+  { nombre: 'Raúl',           piso: '11', area: 'Observatorio' },
+  { nombre: 'Mejia',          piso: '11', area: 'Observatorio' },
+  { nombre: 'Jhon C',         piso: '11', area: 'Observatorio' },
+  { nombre: 'Jorge',          piso: '11', area: 'Observatorio' },
+  { nombre: 'Maria Isabel D', piso: '11', area: 'Jurídica'     },
+  { nombre: 'Ana Karina',     piso: '11', area: 'Jurídica'     },
+  { nombre: 'Bibiana O',      piso: '11', area: 'Jurídica'     },
+];
+
+const DEMO_PRODUCTS = [
+  { id:'d1', emoji:'🍫', nombre:'Chocolatina Jet',  precio:2000, costo:1200, stock:15, categoria:'Dulces'   },
+  { id:'d2', emoji:'🍬', nombre:'Bon Bon Bum',       precio:500,  costo:250,  stock:40, categoria:'Dulces'   },
+  { id:'d3', emoji:'🍭', nombre:'Halls Rojo',        precio:800,  costo:400,  stock:0,  categoria:'Dulces'   },
+  { id:'d4', emoji:'🍪', nombre:'Oreo x4U',          precio:1200, costo:700,  stock:25, categoria:'Galletas' },
+  { id:'d5', emoji:'🥔', nombre:'Papas Limón',       precio:1500, costo:983,  stock:6,  categoria:'Mecato'   },
+];
+
+// ═══════════════════════════════════════════════
+//  VISTAS
+// ═══════════════════════════════════════════════
+window.showStore = function() {
+  document.getElementById('storeView').classList.add('active');
+  document.getElementById('adminView').classList.remove('active');
+  document.getElementById('cartBtn').style.display = '';
+  closeCart();
+};
+
+window.showAdmin = function() {
+  document.getElementById('storeView').classList.remove('active');
+  document.getElementById('adminView').classList.add('active');
+  document.getElementById('cartBtn').style.display = 'none';
+  closeCart();
+  if (adminLoggedIn) {
+    showAdminPanel();
+  }
+};
+
+function showAdminPanel() {
+  document.getElementById('adminLogin').style.display = 'none';
+  document.getElementById('adminPanel').style.display = 'block';
+  startRealtimeListeners();
+}
+
+// ═══════════════════════════════════════════════
+//  AUTH — Login con Firebase Authentication
+//  Reemplaza el hash SHA-256 anterior
+//  El admin se crea en Firebase Console → Authentication
+// ═══════════════════════════════════════════════
+window.checkAdmin = async function() {
+  const email = document.getElementById('adminEmail').value.trim();
+  const pass  = document.getElementById('adminPassInput').value;
+  if (!email || !pass) { toast('Completa email y contraseña', 'error'); return; }
+
+  const btn = document.getElementById('loginBtn');
+  btn.textContent = '⏳ Ingresando...'; btn.disabled = true;
+
+  // Rate limiting básico
+  if (isLockedOut()) {
+    const s = getLoginState();
+    const mins = Math.ceil((s.lockedUntil - Date.now()) / 60000);
+    toast(`🔒 Demasiados intentos. Espera ${mins} min.`, 'error');
+    btn.textContent = 'Ingresar'; btn.disabled = false;
+    return;
+  }
+
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+    clearLoginAttempts();
+    // onAuthStateChanged lo maneja desde aquí
+  } catch(e) {
+    const attempts = recordFailedAttempt();
+    const remaining = 5 - attempts;
+    const msg = remaining <= 0
+      ? '🔒 Cuenta bloqueada por 5 minutos'
+      : `Credenciales incorrectas — ${remaining} intento${remaining!==1?'s':''} restante${remaining!==1?'s':''}`;
+    toast(msg, 'error');
+    document.getElementById('adminPassInput').value = '';
+  } finally {
+    btn.textContent = 'Ingresar'; btn.disabled = false;
+  }
+};
+
+window.logoutAdmin = async function() {
+  stopRealtimeListeners();
+  await signOut(auth);
+  adminLoggedIn = false;
+  document.getElementById('adminLogin').style.display = 'block';
+  document.getElementById('adminPanel').style.display = 'none';
+  document.getElementById('adminPassInput').value = '';
+  document.getElementById('adminEmail').value = '';
+  showStore();
+};
+
+// Escuchar cambios de sesión automáticamente
+onAuthStateChanged(auth, user => {
+  if (user) {
+    adminLoggedIn = true;
+    if (document.getElementById('adminView').classList.contains('active')) {
+      showAdminPanel();
+    }
+  } else {
+    adminLoggedIn = false;
+  }
+});
+
+// Rate limiting
+const MAX_ATTEMPTS = 5, LOCKOUT_MS = 5 * 60 * 1000;
+function getLoginState() { try { return JSON.parse(localStorage.getItem('meka_login_state')||'{}'); } catch{return{};} }
+function setLoginState(s) { localStorage.setItem('meka_login_state', JSON.stringify(s)); }
+function isLockedOut() {
+  const s = getLoginState();
+  if (!s.lockedUntil) return false;
+  if (Date.now() < s.lockedUntil) return true;
+  setLoginState({}); return false;
+}
+function recordFailedAttempt() {
+  const s = getLoginState();
+  const attempts = (s.attempts||0)+1;
+  if (attempts >= MAX_ATTEMPTS) setLoginState({ attempts, lockedUntil: Date.now()+LOCKOUT_MS });
+  else setLoginState({ attempts });
+  return attempts;
+}
+function clearLoginAttempts() { setLoginState({}); }
+
+// ═══════════════════════════════════════════════
+//  PRODUCTOS — Leer de Firestore
+//  Antes: fetch(sheetUrl + '?action=getProducts')
+//  Ahora: getDocs(collection(db, 'productos'))
+// ═══════════════════════════════════════════════
+window.loadProducts = async function() {
+  // Mostrar skeleton mientras carga
+  showProductSkeleton();
+  try {
+    const snap = await getDocs(collection(db, COL_PRODUCTOS));
+    if (!snap.empty) {
+      products = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } else {
+      products = DEMO_PRODUCTS;
+      toast('Sin productos en Firestore — mostrando demo', 'error');
+    }
+  } catch(e) {
+    products = DEMO_PRODUCTS;
+    toast('Sin conexión — modo demo', 'error');
+  }
+  buildCatTabs();
+  renderProducts();
+};
+
+// ═══════════════════════════════════════════════
+//  TIEMPO REAL — onSnapshot reemplaza el polling
+//  Antes: setInterval(loadOrders, 30000)
+//  Ahora: onSnapshot detecta cambios al instante
+// ═══════════════════════════════════════════════
+function startRealtimeListeners() {
+  stopRealtimeListeners();
+
+  // Listener pedidos — ordenados por fecha desc
+  const qPedidos = query(collection(db, COL_PEDIDOS), orderBy('timestamp', 'desc'));
+  unsubOrders = onSnapshot(qPedidos, snap => {
+    orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderOrders();
+    updateStats();
+    checkNewOrders();
+  });
+
+  // Listener créditos
+  unsubCredits = onSnapshot(collection(db, COL_CREDITOS), snap => {
+    credits = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    updateStats();
+    if (document.getElementById('tab-creditos').classList.contains('active')) {
+      renderCreditGrid();
+      updateCreditStats();
+    }
+  });
+}
+
+function stopRealtimeListeners() {
+  if (unsubOrders)  { unsubOrders();  unsubOrders  = null; }
+  if (unsubCredits) { unsubCredits(); unsubCredits = null; }
+}
+
+// ═══════════════════════════════════════════════
+//  ENVIAR PEDIDO
+//  Antes: securePost({ action:'newOrder', ... })
+//  Ahora: addDoc(collection(db, 'pedidos'), { ... })
+// ═══════════════════════════════════════════════
+window.submitOrder = async function() {
+  const name = document.getElementById('fName').value.trim();
+  const piso = document.getElementById('fPiso').value.trim();
+  const area = document.getElementById('fArea').value.trim();
+  if (!name||!piso||!area) { toast('Completa todos los campos 👆','error'); return; }
+  if (!Object.keys(cart).length) { toast('Agrega productos primero 🛒','error'); return; }
+
+  const total = Object.values(cart).reduce((s,v) => s+v.price*v.qty, 0);
+
+  if (selectedPay === 'Efectivo') {
+    const paga = parseFloat(document.getElementById('fPaga').value)||0;
+    if (!paga) { toast('Ingresa con cuánto paga el cliente 💵','error'); return; }
+    if (paga < total) { toast(`El monto es menor al total (${fmtPrice(total)}) 💵`,'error'); return; }
+  }
+
+  const items = Object.entries(cart).map(([n,v]) => ({ nombre:n, qty:v.qty }));
+  const productosStr = items.map(i=>`${i.nombre} x${i.qty}`).join(', ');
+  const paga  = selectedPay==='Efectivo' ? parseFloat(document.getElementById('fPaga').value):0;
+  const cambio = paga ? Math.max(0,paga-total):0;
+  const pagoStr = selectedPay==='Efectivo'
+    ? `Efectivo (paga ${fmtPrice(paga)}, devolver ${fmtPrice(cambio)})`
+    : selectedPay==='Fiar' ? 'Fiar / Crédito' : 'Transferencia';
+
+  const btn = document.querySelector('#orderForm button');
+  btn.textContent='⏳ Enviando...'; btn.disabled=true;
+
+  try {
+    // Escribir pedido en Firestore
+    await addDoc(collection(db, COL_PEDIDOS), {
+      timestamp: serverTimestamp(),
+      cliente: name, piso, area,
+      productos: productosStr,
+      total, pago: pagoStr,
+      estado: 'Pedido'
+    });
+
+    // Si es fiado, también registrar en créditos
+    if (selectedPay === 'Fiar') {
+      await addDoc(collection(db, COL_CREDITOS), {
+        timestamp: serverTimestamp(),
+        cliente: name, piso, area,
+        tipo: 'Pedido', monto: total, nota: productosStr, metodo: ''
+      });
+    }
+
+    cart = {};
+    updateCartBadge();
+    closeCart();
+    renderProducts();
+    resetOrderForm();
+    toast(selectedPay==='Fiar'
+      ? `📒 Pedido fiado registrado — ${fmtPrice(total)}`
+      : '🎉 ¡Pedido enviado! Te lo llevamos pronto.', 'success');
+  } catch(e) {
+    toast('Error al enviar pedido. Intenta de nuevo.','error');
+  } finally {
+    btn.textContent='🚀 Confirmar pedido'; btn.disabled=false;
+  }
+};
+
+// ═══════════════════════════════════════════════
+//  MARCAR ENTREGADO + DESCONTAR STOCK
+//  Antes: securePost({ action:'updateStatus', row, ... })
+//  Ahora: updateDoc(doc(db,'pedidos',id), { estado:'Entregado' })
+//         + updateDoc(doc(db,'productos',id), { stock: nuevoStock })
+// ═══════════════════════════════════════════════
+window.markDelivered = async function(orderId, productosEncoded) {
+  const productosStr = decodeURIComponent(productosEncoded);
+  const items = productosStr.split(',').map(s => {
+    const m = s.trim().match(/^(.+?) x(\d+)$/);
+    return m ? { nombre: m[1].trim(), qty: parseInt(m[2]) } : null;
+  }).filter(Boolean);
+
+  try {
+    // Cambiar estado del pedido
+    await updateDoc(doc(db, COL_PEDIDOS, orderId), { estado: 'Entregado' });
+
+    // Descontar stock de cada producto
+    for (const item of items) {
+      const p = products.find(x => x.nombre === item.nombre);
+      if (p && p.id) {
+        const newStock = Math.max(0, (Number(p.stock)||0) - item.qty);
+        await updateDoc(doc(db, COL_PRODUCTOS, p.id), { stock: newStock });
+        p.stock = newStock; // actualizar local
+      }
+    }
+    toast('✅ Pedido marcado como entregado','success');
+    buildCatTabs(); renderProducts();
+  } catch(e) {
+    toast('Error al actualizar','error');
+  }
+};
+
+// ═══════════════════════════════════════════════
+//  VENTA RÁPIDA (admin)
+// ═══════════════════════════════════════════════
+window.submitQuickSale = async function() {
+  const entries = Object.entries(qsCart);
+  if (!entries.length) return;
+
+  if (qsPayMethod === 'Fiar') {
+    const fn = document.getElementById('qsFiadoSelect').value;
+    if (!fn) { toast('Selecciona el cliente que fía 📒','error'); return; }
+  }
+
+  const items = entries.map(([n,qty]) => ({ nombre:n, qty }));
+  const productosStr = items.map(i=>`${i.nombre} x${i.qty}`).join(', ');
+  const total = entries.reduce((s,[n,q]) => {
+    const p = products.find(x => x.nombre===n);
+    return s+(p?Number(p.precio)*q:0);
+  },0);
+
+  const esFiado = qsPayMethod==='Fiar';
+  const fiadoNombre = esFiado ? document.getElementById('qsFiadoSelect').value:'';
+  const fiadoData   = esFiado ? FIADOS.find(f=>f.nombre===fiadoNombre):null;
+  const clienteLabel = esFiado ? fiadoNombre : '— Admin —';
+  const pisoLabel    = esFiado&&fiadoData ? fiadoData.piso:'—';
+  const areaLabel    = esFiado&&fiadoData ? fiadoData.area:'—';
+
+  const btn = document.getElementById('qsConfirmBtn');
+  btn.textContent='⏳ Procesando...'; btn.disabled=true;
+
+  try {
+    const pedidoRef = await addDoc(collection(db, COL_PEDIDOS), {
+      timestamp: serverTimestamp(),
+      cliente: clienteLabel, piso: pisoLabel, area: areaLabel,
+      productos: productosStr, total, pago: esFiado?'Fiar / Crédito':qsPayMethod,
+      estado: esFiado ? 'Pedido' : 'Entregado'
+    });
+
+    if (!esFiado) {
+      // Descontar stock inmediatamente
+      for (const item of items) {
+        const p = products.find(x=>x.nombre===item.nombre);
+        if (p&&p.id) {
+          const newStock = Math.max(0,(Number(p.stock)||0)-item.qty);
+          await updateDoc(doc(db,COL_PRODUCTOS,p.id),{ stock:newStock });
+          p.stock = newStock;
+        }
+      }
+    } else {
+      // Registrar en créditos
+      await addDoc(collection(db, COL_CREDITOS), {
+        timestamp: serverTimestamp(),
+        cliente: fiadoNombre, piso: pisoLabel, area: areaLabel,
+        tipo:'Pedido', monto:total, nota:productosStr, metodo:''
+      });
+    }
+
+    toast(esFiado
+      ? `📒 Fiado registrado para ${fiadoNombre} — ${fmtPrice(total)}`
+      : `⚡ Venta registrada — ${fmtPrice(total)}`, 'success');
+
+    qsCart={};
+    document.getElementById('qsPaga').value='';
+    document.getElementById('qsDevuelto').style.display='none';
+    document.getElementById('qsFiadoSelect').value='';
+    document.getElementById('qsFiadoWrap').style.display='none';
+    qsPayMethod='Efectivo';
+    qsSelectPay('Efectivo');
+    buildCatTabs(); renderProducts();
+    renderQuickSaleGrid();
+  } catch(e) {
+    toast('Error al registrar la venta','error');
+  } finally {
+    btn.textContent='✅ Confirmar venta'; btn.disabled=false;
+  }
+};
+
+// ═══════════════════════════════════════════════
+//  REGISTRAR ABONO
+// ═══════════════════════════════════════════════
+window.submitAbono = async function() {
+  if (!activeCreditClient) return;
+  const monto  = parseFloat(document.getElementById('abonoMonto').value)||0;
+  const nota   = document.getElementById('abonoNota').value.trim();
+  const metodo = document.getElementById('abonoMetodo').value;
+  if (!monto||monto<=0) { toast('Ingresa un monto válido 💰','error'); return; }
+  const balance = activeCreditClient.pedidos - activeCreditClient.abonos;
+  if (monto > balance+1) { toast(`El abono supera el saldo (${fmtPrice(balance)})`,'error'); return; }
+
+  const btn = document.querySelector('#creditModalOverlay .btn-gold');
+  btn.textContent='⏳ Registrando...'; btn.disabled=true;
+
+  try {
+    await addDoc(collection(db, COL_CREDITOS), {
+      timestamp: serverTimestamp(),
+      cliente: activeCreditClient.cliente,
+      piso: activeCreditClient.piso,
+      area: activeCreditClient.area,
+      tipo:'Abono', monto, nota, metodo
+    });
+    toast(`💰 Abono de ${fmtPrice(monto)} registrado`,'success');
+    closeCreditModal();
+  } catch(e) {
+    toast('Error al registrar abono','error');
+  } finally {
+    btn.textContent='💰 Registrar abono'; btn.disabled=false;
+  }
+};
+
+// ═══════════════════════════════════════════════
+//  RENDER HELPERS (idénticos al original)
+// ═══════════════════════════════════════════════
+function showProductSkeleton() {
+  document.getElementById('productsGrid').innerHTML = Array(8).fill(0).map(()=>`
+    <div class="product-card" style="pointer-events:none">
+      <div style="width:100px;height:100px;border-radius:12px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite"></div>
+      <div style="width:80%;height:14px;border-radius:6px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;margin-top:4px"></div>
+      <div style="width:50%;height:18px;border-radius:6px;background:linear-gradient(90deg,var(--border) 25%,var(--card) 50%,var(--border) 75%);background-size:200% 100%;animation:shimmer 1.2s infinite"></div>
+    </div>`).join('');
+}
+
+function getImgHtml(p) {
+  const raw = (p.imagen||p.emoji||'').toString().trim();
+  if (!raw) return `<div class="product-img-wrap"><span style="font-size:2.5rem">🍬</span></div>`;
+  if (raw.startsWith('http')) {
+    let url=raw;
+    const dm=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+    if(dm) url=`https://drive.google.com/thumbnail?id=${dm[1]}&sz=w200`;
+    return `<div class="product-img-wrap"><img class="product-img" src="${url}" alt="${p.nombre}"
+      onerror="this.parentElement.innerHTML='<span style=\\'font-size:2.5rem\\'>🍬</span>'"></div>`;
+  }
+  return `<div class="product-img-wrap"><span style="font-size:2.5rem">${raw}</span></div>`;
+}
+
+function buildCatTabs() {
+  const cats=['Todos',...Object.keys(CAT_CONFIG)];
+  const counts={};
+  products.forEach(p=>{ const c=p.categoria||'Sin categoría'; counts[c]=(counts[c]||0)+1; });
+  document.getElementById('catTabs').innerHTML=cats.map(c=>{
+    const icon=c==='Todos'?'🛍️':(CAT_CONFIG[c]||'📦');
+    const count=c==='Todos'?products.length:(counts[c]||0);
+    if(c!=='Todos'&&!counts[c]) return '';
+    return `<button class="cat-tab ${activeCategory===c?'active':''}" onclick="selectCategory('${c}')">
+      ${icon} ${c} <span class="cat-count">${count}</span></button>`;
+  }).join('');
+}
+
+window.selectCategory = function(cat) { activeCategory=cat; buildCatTabs(); renderProducts(); };
+window.onSearch = function(val) {
+  searchQuery=val.trim().toLowerCase();
+  document.getElementById('searchClear').classList.toggle('visible',val.length>0);
+  renderProducts();
+};
+window.clearSearch = function() {
+  searchQuery='';
+  document.getElementById('searchInput').value='';
+  document.getElementById('searchClear').classList.remove('visible');
+  renderProducts();
+};
+
+function getFilteredProducts() {
+  return products.filter(p=>{
+    const matchCat = activeCategory === 'Todos' || (p.categoria || '') === activeCategory;
+    const matchSearch = !searchQuery || p.nombre.toLowerCase().includes(searchQuery);
+    return matchCat && matchSearch;
+  });
+}
+
+function productCardHtml(p) {
+  const oos=Number(p.stock)<=0, low=Number(p.stock)>0&&Number(p.stock)<=5;
+  const qty=cart[p.nombre]?cart[p.nombre].qty:0;
+  const safe=p.nombre.replace(/'/g,"\\'");
+  return `<div class="product-card ${oos?'out-of-stock':''}" id="card-${encodeId(p.nombre)}">
+    ${getImgHtml(p)}
+    <div class="product-name">${p.nombre}</div>
+    <div class="product-price">${fmtPrice(p.precio)}</div>
+    <div class="product-stock ${oos?'':low?'stock-low':'stock-ok'}">
+      ${oos?'❌ Agotado':low?`⚠️ Solo ${p.stock} und.`:`✅ ${p.stock} disponibles`}
+    </div>
+    ${oos?'':qty===0
+      ?`<button class="add-btn" onclick="addToCart('${safe}')">+ Agregar</button>`
+      :`<div class="qty-control">
+          <button class="qty-btn" onclick="changeQty('${safe}',-1)">−</button>
+          <span class="qty-num">${qty}</span>
+          <button class="qty-btn" onclick="changeQty('${safe}',1)">+</button>
+        </div>`}
+  </div>`;
+}
+
+function renderProducts() {
+  const grid=document.getElementById('productsGrid');
+  const filtered=getFilteredProducts();
+  if(!filtered.length){
+    const msg=searchQuery?`No encontramos "<strong>${searchQuery}</strong>" 😕`:'Sin productos en esta categoría';
+    grid.innerHTML=`<div class="no-results"><div class="nr-icon">🔍</div><p>${msg}</p></div>`;
+    return;
+  }
+  if(activeCategory==='Todos'&&!searchQuery){
+    const groups={};
+    filtered.forEach(p=>{ const c=p.categoria||'Otros'; if(!groups[c])groups[c]=[]; groups[c].push(p); });
+    const keys=[...Object.keys(CAT_CONFIG),'Otros','Sin categoría'].filter(k=>groups[k]);
+    grid.innerHTML=keys.map(cat=>{
+      const icon=CAT_CONFIG[cat]||'📦';
+      return `<div class="cat-group-label"><span>${icon} ${cat}</span></div>`+groups[cat].map(productCardHtml).join('');
+    }).join('');
+  } else {
+    grid.innerHTML=filtered.map(productCardHtml).join('');
+  }
+}
+
+// ─── CARRITO ────────────────────────────────────
+window.addToCart = function(name) {
+  const p=products.find(x=>x.nombre===name); if(!p) return;
+  if(!cart[name]) cart[name]={qty:1,price:Number(p.precio),emoji:p.emoji||'🍬',imagen:p.imagen||''};
+  else cart[name].qty++;
+  updateCartBadge(); renderProducts();
+  toast(`🛒 ${p.nombre} agregado al carrito`,'success');
+};
+window.changeQty = function(name,delta) {
+  if(!cart[name]) return;
+  cart[name].qty+=delta;
+  if(cart[name].qty<=0) delete cart[name];
+  updateCartBadge(); renderProducts();
+  if(!Object.keys(cart).length) renderCartEmpty(); else renderCartItems();
+};
+function updateCartBadge() {
+  document.getElementById('cartCount').textContent=Object.values(cart).reduce((s,i)=>s+i.qty,0);
+}
+window.openCart = function() {
+  document.getElementById('cartOverlay').classList.add('open');
+  document.getElementById('cartDrawer').classList.add('open');
+  renderCartItems();
+};
+window.closeCart = function() {
+  document.getElementById('cartOverlay').classList.remove('open');
+  document.getElementById('cartDrawer').classList.remove('open');
+};
+function renderCartEmpty() {
+  document.getElementById('cartItems').innerHTML='<div class="cart-empty">Tu carrito está vacío 🍃</div>';
+  document.getElementById('cartFooter').style.display='none';
+}
+function renderCartItems() {
+  const items=Object.entries(cart);
+  if(!items.length){renderCartEmpty();return;}
+  document.getElementById('cartFooter').style.display='block';
+  const total=items.reduce((s,[,v])=>s+v.price*v.qty,0);
+  document.getElementById('cartTotal').textContent=fmtPrice(total);
+  document.getElementById('cartItems').innerHTML=items.map(([name,v])=>{
+    let thumb=v.imagen&&v.imagen.startsWith('http')
+      ? `<img src="${(()=>{let u=v.imagen;const m=v.imagen.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;return u;})()" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0" onerror="this.style.display='none'">`
+      : `<span style="font-size:1.6rem;flex-shrink:0">${v.emoji||'🍬'}</span>`;
+    return `<div class="cart-item">${thumb}
+      <div class="cart-item-info">
+        <div class="cart-item-name">${name}</div>
+        <div class="cart-item-price">${fmtPrice(v.price)} c/u</div>
+      </div>
+      <div class="cart-item-qty">
+        <button class="qty-btn" onclick="changeQty('${name}',-1);renderCartItems()">−</button>
+        <span class="qty-num">${v.qty}</span>
+        <button class="qty-btn" onclick="changeQty('${name}',1);renderCartItems()">+</button>
+      </div>
+      <div style="font-weight:700;min-width:60px;text-align:right">${fmtPrice(v.price*v.qty)}</div>
+    </div>`;
+  }).join('');
+}
+window.renderCartItems = renderCartItems;
+
+// ─── PAGO ───────────────────────────────────────
+window.selectPay = function(method) {
+  selectedPay=method;
+  ['Efectivo','Transferencia','Fiar'].forEach(m=>{
+    const el=document.getElementById('pay'+m);
+    el.classList.toggle('selected',m===method);
+  });
+  const fiarEl=document.getElementById('payFiar');
+  fiarEl.style.borderColor=method==='Fiar'?'#9b59b6':'';
+  fiarEl.style.background=method==='Fiar'?'rgba(155,89,182,0.15)':'';
+  fiarEl.style.color=method==='Fiar'?'#9b59b6':'';
+  const box=document.getElementById('changeBox');
+  if(method==='Efectivo') { box.classList.add('visible'); }
+  else { box.classList.remove('visible'); document.getElementById('fPaga').value=''; document.getElementById('changeResult').style.display='none'; }
+  const nw=document.getElementById('nameFieldWrap');
+  if(method==='Fiar') {
+    nw.innerHTML=`<label>Cliente autorizado <span style="color:#9b59b6">📒</span></label>
+      <select id="fName" onchange="autoFillFiado(this.value)"
+        style="background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.9rem;outline:none;width:100%;appearance:none;cursor:pointer">
+        <option value="">— Selecciona cliente —</option>
+        ${FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('')}
+      </select>`;
+    document.getElementById('fPiso').readOnly=true; document.getElementById('fPiso').style.opacity='0.5';
+    document.getElementById('fArea').disabled=true; document.getElementById('fArea').style.opacity='0.5';
+    document.getElementById('fPiso').value=''; document.getElementById('fArea').value='';
+  } else {
+    nw.innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
+    document.getElementById('fPiso').readOnly=false; document.getElementById('fPiso').style.opacity='';
+    document.getElementById('fArea').disabled=false; document.getElementById('fArea').style.opacity='';
+  }
+};
+window.autoFillFiado = function(nombre) {
+  const f=FIADOS.find(x=>x.nombre===nombre); if(!f) return;
+  document.getElementById('fPiso').value=f.piso;
+  const ae=document.getElementById('fArea');
+  for(let i=0;i<ae.options.length;i++){if(ae.options[i].text===f.area||ae.options[i].value===f.area){ae.selectedIndex=i;break;}}
+};
+window.calcChange = function() {
+  const total=Object.values(cart).reduce((s,v)=>s+v.price*v.qty,0);
+  const paga=parseFloat(document.getElementById('fPaga').value)||0;
+  const res=document.getElementById('changeResult'), amt=document.getElementById('changeAmount');
+  if(!paga){res.style.display='none';return;}
+  res.style.display='flex';
+  const dev=paga-total;
+  amt.textContent=dev<0?`Faltan ${fmtPrice(Math.abs(dev))}`:fmtPrice(dev);
+  amt.className='amount '+(dev<0?'err':'ok');
+};
+
+function resetOrderForm() {
+  document.getElementById('nameFieldWrap').innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
+  document.getElementById('fPiso').value=''; document.getElementById('fPiso').readOnly=false; document.getElementById('fPiso').style.opacity='';
+  document.getElementById('fArea').value=''; document.getElementById('fArea').disabled=false; document.getElementById('fArea').style.opacity='';
+  document.getElementById('fPaga').value=''; document.getElementById('changeResult').style.display='none';
+  selectedPay='Efectivo';
+  document.getElementById('payEfectivo').classList.add('selected');
+  document.getElementById('payTransferencia').classList.remove('selected');
+  document.getElementById('payFiar').classList.remove('selected');
+  document.getElementById('payFiar').style.cssText='';
+  document.getElementById('changeBox').classList.add('visible');
+}
+
+// ─── ADMIN PEDIDOS ───────────────────────────────
+function renderOrders() {
+  const tbody=document.getElementById('ordersBody');
+  if(!orders.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:40px">Sin pedidos aún 🍃</td></tr>';return;}
+  tbody.innerHTML=orders.map(o=>{
+    const delivered=o.estado==='Entregado';
+    const ts=o.timestamp?.toDate?o.timestamp.toDate().toLocaleString('es-CO'):(o.timestamp||'');
+    return `<tr>
+      <td><strong>${o.cliente}</strong><br><small style="color:var(--muted)">${ts}</small></td>
+      <td>Piso ${o.piso} · ${o.area}</td>
+      <td style="max-width:200px;word-break:break-word;font-size:0.82rem">${o.productos}</td>
+      <td><strong style="color:var(--gold)">${fmtPrice(o.total)}</strong></td>
+      <td>${o.pago?.includes('Transferencia')||o.pago==='Transferencia'?'📲':'💵'} ${o.pago}</td>
+      <td><span class="badge ${delivered?'badge-delivered':'badge-pending'}">${delivered?'✅ Entregado':'⏳ Pedido'}</span></td>
+      <td>${delivered?'—':`<button class="btn btn-success btn-sm" onclick="markDelivered('${o.id}','${encodeURIComponent(o.productos)}')">✅ Entregar</button>`}</td>
+    </tr>`;
+  }).join('');
+}
+
+function updateStats() {
+  const today=new Date().toLocaleDateString('es-CO');
+  const todayO=orders.filter(o=>{
+    const ts=o.timestamp?.toDate?o.timestamp.toDate().toLocaleDateString('es-CO'):'';
+    return ts===today;
+  });
+  document.getElementById('statToday').textContent=todayO.length;
+  document.getElementById('statPending').textContent=orders.filter(o=>o.estado!=='Entregado').length;
+  document.getElementById('statDone').textContent=orders.filter(o=>o.estado==='Entregado').length;
+  const rev=todayO.filter(o=>o.estado==='Entregado').reduce((s,o)=>s+Number(o.total||0),0);
+  document.getElementById('statRevenue').textContent=fmtPrice(rev);
+  if(credits.length) updateCreditStats();
+}
+
+function checkNewOrders() {
+  const pending=orders.filter(o=>o.estado!=='Entregado');
+  if(pending.length>lastOrderCount&&lastOrderCount>0){
+    const newest=pending[0];
+    document.getElementById('newOrderName').textContent=newest.cliente;
+    document.getElementById('newOrderAlert').classList.add('show');
+    setTimeout(()=>document.getElementById('newOrderAlert').classList.remove('show'),8000);
+  }
+  lastOrderCount=pending.length;
+}
+
+// ─── INVENTARIO ──────────────────────────────────
+window.renderInventory = function() {
+  const tbody=document.getElementById('invBody');
+  if(!products.length){tbody.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:40px">Sin datos</td></tr>';return;}
+  const maxStock=Math.max(...products.map(p=>Number(p.stock)||0),1);
+  tbody.innerHTML=products.map(p=>{
+    const stock=Number(p.stock); const pct=Math.round((stock/maxStock)*100);
+    const cls=stock===0?'critical':stock<=5?'low':'';
+    return `<tr>
+      <td>${p.emoji||'🍬'} <strong>${p.nombre}</strong></td>
+      <td style="color:var(--gold)">${fmtPrice(p.precio)}</td>
+      <td style="color:var(--muted)">${fmtPrice(p.costo)}</td>
+      <td><div style="display:flex;align-items:center;gap:10px">
+        <div class="stock-bar-wrap" style="width:80px"><div class="stock-bar ${cls}" style="width:${pct}%"></div></div>
+        <span style="font-weight:600">${stock}</span></div></td>
+      <td><span class="badge ${stock===0?'badge-pending':stock<=5?'badge-pending':'badge-delivered'}">
+        ${stock===0?'❌ Agotado':stock<=5?'⚠️ Bajo':'✅ OK'}</span></td>
+    </tr>`;
+  }).join('');
+};
+
+// ─── CRÉDITOS ───────────────────────────────────
+let activeCreditClient=null;
+
+function getCreditsByClient() {
+  const clients={};
+  credits.forEach(c=>{
+    const key=(c.cliente||'').trim(); if(!key||key==='—') return;
+    if(!clients[key]) clients[key]={cliente:key,piso:c.piso,area:c.area,pedidos:0,abonos:0,entries:[]};
+    const tipo=(c.tipo||'').trim(), monto=Number(c.monto)||0;
+    if(tipo==='Pedido') clients[key].pedidos+=monto;
+    else if(tipo==='Abono') clients[key].abonos+=monto;
+    const ts=c.timestamp?.toDate?c.timestamp.toDate().toLocaleString('es-CO'):(c.timestamp||'');
+    clients[key].entries.push({...c,tipo,timestamp:ts});
+  });
+  return Object.values(clients).sort((a,b)=>(b.pedidos-b.abonos)-(a.pedidos-a.abonos));
+}
+
+window.loadCredits = function() { renderCreditGrid(); updateCreditStats(); };
+
+function renderCreditGrid() {
+  const grid=document.getElementById('creditGrid');
+  const clients=getCreditsByClient();
+  if(!clients.length){
+    grid.innerHTML='<div class="credit-empty">Sin créditos registrados 🎉<br><small>Cuando un cliente escoja "Fiar" aparecerá aquí</small></div>';
+    document.getElementById('creditTotalOwed').textContent='$0';
+    return;
+  }
+  grid.innerHTML=clients.map(c=>{
+    const balance=c.pedidos-c.abonos;
+    const balClass=balance<=0?'clear':balance<c.pedidos?'partial':'owed';
+    return `<div class="credit-client-card ${balance<=0?'zero':''}" onclick="openCreditModal('${encodeURIComponent(c.cliente)}')">
+      <div class="credit-client-name">👤 ${c.cliente}</div>
+      <div class="credit-client-meta">Piso ${c.piso} · ${c.area}</div>
+      <div class="credit-client-balance ${balClass}">${balance<=0?'✅ Al día':fmtPrice(balance)}</div>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:2px">
+        ${c.entries.filter(e=>e.tipo==='Pedido').length} pedido(s) · ${c.entries.filter(e=>e.tipo==='Abono').length} abono(s)</div>
+    </div>`;
+  }).join('');
+}
+
+function updateCreditStats() {
+  const clients=getCreditsByClient();
+  const total=clients.reduce((s,c)=>s+Math.max(0,c.pedidos-c.abonos),0);
+  document.getElementById('creditTotalOwed').textContent=fmtPrice(total);
+  document.getElementById('statCartera').textContent=fmtPrice(total);
+}
+
+window.openCreditModal = function(encodedName) {
+  const name=decodeURIComponent(encodedName);
+  const client=getCreditsByClient().find(c=>c.cliente===name); if(!client) return;
+  activeCreditClient=client;
+  const balance=client.pedidos-client.abonos;
+  document.getElementById('cModalName').textContent=`📒 ${client.cliente}`;
+  document.getElementById('cModalMeta').textContent=`Piso ${client.piso} · ${client.area}`;
+  document.getElementById('cModalBalance').textContent=balance<=0?'✅ Al día':fmtPrice(balance);
+  document.getElementById('cModalBalance').style.color=balance<=0?'var(--success)':balance<client.pedidos?'var(--gold)':'var(--accent)';
+  document.getElementById('cModalTotal').textContent=fmtPrice(client.pedidos);
+  document.getElementById('cModalPaid').textContent=fmtPrice(client.abonos);
+  const sorted=[...client.entries].reverse();
+  document.getElementById('cModalTimeline').innerHTML=sorted.length?sorted.map(e=>`
+    <div class="credit-entry">
+      <div class="credit-entry-icon ${e.tipo==='Pedido'?'entry-pedido':'entry-abono'}">${e.tipo==='Pedido'?'🛍️':'💰'}</div>
+      <div class="credit-entry-info">
+        <div class="credit-entry-desc">${e.tipo==='Abono'?`Abono${e.metodo?' · '+e.metodo:''}`:e.nota||'Pedido'}</div>
+        ${e.nota&&e.tipo==='Abono'?`<div style="font-size:.72rem;color:var(--muted)">${e.nota}</div>`:''}
+        <div class="credit-entry-date">${e.timestamp||'—'}</div>
+      </div>
+      <div class="credit-entry-amount ${e.tipo==='Pedido'?'entry-amt-neg':'entry-amt-pos'}">
+        ${e.tipo==='Pedido'?'-':'+'}${fmtPrice(e.monto)}</div>
+    </div>`).join(''):'<div class="credit-empty">Sin movimientos</div>';
+  document.getElementById('abonoMonto').value=''; document.getElementById('abonoNota').value='';
+  document.getElementById('creditModalOverlay').classList.add('open');
+};
+window.closeCreditModal = function() {
+  document.getElementById('creditModalOverlay').classList.remove('open');
+  activeCreditClient=null;
+};
+
+// ─── VENTA RÁPIDA ───────────────────────────────
+let qsCart={}, qsPayMethod='Efectivo';
+window.renderQuickSaleGrid = function() {
+  const grid=document.getElementById('qsGrid');
+  if(!products.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Sin productos</div>';return;}
+  grid.innerHTML=products.map(p=>{
+    const oos=Number(p.stock)<=0, qty=qsCart[p.nombre]||0;
+    const raw=(p.imagen||p.emoji||'').toString().trim();
+    let imgHtml=`<span style="font-size:1.8rem">🍬</span>`;
+    if(raw.startsWith('http')){let u=raw;const m=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;imgHtml=`<img src="${u}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`;} else if(raw){imgHtml=`<span style="font-size:1.8rem">${raw}</span>`;}
+    const safe=p.nombre.replace(/'/g,"\\'");
+    return `<div class="qs-card ${oos?'qs-oos':''} ${qty>0?'qs-added':''}" id="qsc-${encodeId(p.nombre)}" onclick="qsAdd('${safe}')">
+      <div class="qs-img-wrap">${imgHtml}</div>
+      <div class="qs-name">${p.nombre}</div>
+      <div class="qs-price">${fmtPrice(p.precio)}</div>
+      ${qty>0?`<div class="qs-qty-row"><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',-1)">−</button><span style="font-weight:700;font-size:.85rem">${qty}</span><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',1)">+</button></div>`:oos?`<span style="font-size:.72rem;color:var(--accent)">Agotado</span>`:`<span style="font-size:.72rem;color:var(--muted)">Toca para agregar</span>`}
+    </div>`;
+  }).join('');
+  updateQsSummary();
+};
+window.qsAdd = function(name) {
+  const p=products.find(x=>x.nombre===name); if(!p||Number(p.stock)<=0) return;
+  qsCart[name]=(qsCart[name]||0)+1; window.renderQuickSaleGrid();
+};
+window.qsChange = function(name,delta) {
+  qsCart[name]=(qsCart[name]||0)+delta; if(qsCart[name]<=0) delete qsCart[name]; window.renderQuickSaleGrid();
+};
+window.qsSelectPay = function(method) {
+  qsPayMethod=method;
+  ['Efectivo','Transferencia','Fiar'].forEach(m=>document.getElementById('qsPay'+m).classList.toggle('selected',m===method));
+  const fb=document.getElementById('qsPayFiar');
+  fb.style.background=method==='Fiar'?'rgba(155,89,182,0.15)':''; fb.style.color=method==='Fiar'?'#9b59b6':'';
+  document.getElementById('qsPaga').style.display=method==='Efectivo'?'block':'none';
+  document.getElementById('qsFiadoWrap').style.display=method==='Fiar'?'block':'none';
+  if(method!=='Efectivo') document.getElementById('qsDevuelto').style.display='none';
+  if(method==='Efectivo') window.qsCalcChange();
+  if(method==='Fiar'){
+    const sel=document.getElementById('qsFiadoSelect');
+    sel.innerHTML='<option value="">— Selecciona cliente autorizado —</option>'+FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('');
+  } else { document.getElementById('qsFiadoSelect').value=''; }
+};
+window.qsCalcChange = function() {
+  const total=Object.entries(qsCart).reduce((s,[n,q])=>{const p=products.find(x=>x.nombre===n);return s+(p?Number(p.precio)*q:0);},0);
+  const paga=parseFloat(document.getElementById('qsPaga').value)||0;
+  const el=document.getElementById('qsDevuelto');
+  if(!paga){el.style.display='none';return;}
+  el.style.display='inline-block';
+  const dev=paga-total;
+  el.textContent=dev<0?`Faltan ${fmtPrice(Math.abs(dev))}`:`Devolver ${fmtPrice(dev)}`;
+  el.className=`qs-devuelto ${dev<0?'err':'ok'}`;
+};
+function updateQsSummary() {
+  const entries=Object.entries(qsCart);
+  const btn=document.getElementById('qsConfirmBtn');
+  if(!entries.length){document.getElementById('qsSummaryItems').textContent='Ningún producto seleccionado';document.getElementById('qsTotal').textContent='$0';if(btn)btn.disabled=true;return;}
+  if(btn)btn.disabled=false;
+  document.getElementById('qsSummaryItems').textContent=entries.map(([n,q])=>`${n} x${q}`).join(', ');
+  const total=entries.reduce((s,[n,q])=>{const p=products.find(x=>x.nombre===n);return s+(p?Number(p.precio)*q:0);},0);
+  document.getElementById('qsTotal').textContent=fmtPrice(total);
+}
+
+// ─── TABS ────────────────────────────────────────
+window.switchTab = function(name,btn) {
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='inventario') window.renderInventory();
+  if(name==='creditos') window.loadCredits();
+  if(name==='venta-rapida') window.renderQuickSaleGrid();
+};
+
+window.refreshAll = function() { /* tiempo real — onSnapshot ya actualiza automáticamente */ };
+
+// ─── UTILS ──────────────────────────────────────
+function fmtPrice(n) { return '$'+Number(n).toLocaleString('es-CO'); }
+function encodeId(name) { return btoa(unescape(encodeURIComponent(name))).replace(/=/g,''); }
+function toast(msg,type='success') {
+  const c=document.getElementById('toastContainer');
+  const el=document.createElement('div'); el.className=`toast ${type}`; el.textContent=msg;
+  c.appendChild(el); setTimeout(()=>el.remove(),3500);
+}
+
+// ─── INICIO ─────────────────────────────────────
+loadProducts();
+
+</script>
 <style>
   :root {
     --bg: #0d0d1a;
@@ -638,6 +1539,7 @@
 </head>
 <body>
 
+
 <!-- HEADER -->
 <header>
   <div class="logo">
@@ -690,11 +1592,17 @@
   <div id="adminLogin" class="admin-login">
     <div style="font-size:2.5rem;margin-bottom:12px">🔐</div>
     <h2>Panel Administrador</h2>
-    <p>Ingresa la clave para acceder al panel de Mekatikos</p>
-    <div class="form-group" style="margin-bottom:14px">
-      <input type="password" id="adminPassInput" placeholder="Contraseña" onkeydown="if(event.key==='Enter')checkAdmin()">
+    <p>Ingresa tus credenciales de acceso</p>
+    <div class="form-group" style="margin-bottom:10px">
+      <input type="email" id="adminEmail" placeholder="admin@mekatikos.com"
+        onkeydown="if(event.key==='Enter')document.getElementById('adminPassInput').focus()"
+        style="width:100%">
     </div>
-    <button class="btn btn-primary" style="width:100%" onclick="checkAdmin()">Ingresar</button>
+    <div class="form-group" style="margin-bottom:14px">
+      <input type="password" id="adminPassInput" placeholder="Contraseña"
+        onkeydown="if(event.key==='Enter')checkAdmin()">
+    </div>
+    <button class="btn btn-primary" id="loginBtn" style="width:100%" onclick="checkAdmin()">Ingresar</button>
     <button class="btn btn-outline btn-sm" style="width:100%;margin-top:10px" onclick="showStore()">← Volver a la tienda</button>
   </div>
 
@@ -735,7 +1643,7 @@
         <button class="tab-btn" id="tabVentaRapida" onclick="switchTab('venta-rapida',this)">⚡ Venta Rápida</button>
         <button class="tab-btn" id="tabCreditos" onclick="switchTab('creditos',this)">📒 Créditos</button>
         <button class="tab-btn" id="tabInventario" onclick="switchTab('inventario',this)">📦 Inventario</button>
-        <button class="tab-btn" id="tabConfig" onclick="switchTab('config',this)">⚙️ Configuración</button>
+
       </div>
 
       <!-- TAB: Venta Rápida -->
@@ -2465,5 +3373,6 @@ if (savedProds) products = savedProds;
 loadProducts();
 renderScript();
 </script>
+
 </body>
 </html>
