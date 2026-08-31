@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mekatikos </title>
+<title>Mekatikos 🍬</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍬</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
@@ -590,6 +590,11 @@ function renderCartEmpty() {
   document.getElementById('cartItems').innerHTML='<div class="cart-empty">Tu carrito está vacío 🍃</div>';
   document.getElementById('cartFooter').style.display='none';
 }
+function driveThumb(url, size) {
+  const m = url.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+  return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w${size}` : url;
+}
+
 function renderCartItems() {
   const items=Object.entries(cart);
   if(!items.length){renderCartEmpty();return;}
@@ -597,9 +602,13 @@ function renderCartItems() {
   const total=items.reduce((s,[,v])=>s+v.price*v.qty,0);
   document.getElementById('cartTotal').textContent=fmtPrice(total);
   document.getElementById('cartItems').innerHTML=items.map(([name,v])=>{
-    let thumb=v.imagen&&v.imagen.startsWith('http')
-      ? `<img src="${(()=>{let u=v.imagen;const m=v.imagen.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;return u;})()" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0" onerror="this.style.display='none'">`
-      : `<span style="font-size:1.6rem;flex-shrink:0">${v.emoji||'🍬'}</span>`;
+    let thumb;
+    if (v.imagen && v.imagen.startsWith('http')) {
+      const url = driveThumb(v.imagen, 80);
+      thumb = `<img src="${url}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0" onerror="this.style.display='none'">`;
+    } else {
+      thumb = `<span style="font-size:1.6rem;flex-shrink:0">${v.emoji||'🍬'}</span>`;
+    }
     return `<div class="cart-item">${thumb}
       <div class="cart-item-info">
         <div class="cart-item-name">${name}</div>
