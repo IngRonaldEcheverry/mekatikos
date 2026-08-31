@@ -47,6 +47,7 @@ const auth = getAuth(app);
 const COL_PRODUCTOS = 'productos';
 const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
+const COL_INGRESOS  = 'ingresos';
 
 // ─── 3. ESTADO GLOBAL ───────────────────────────
 let cart         = {};
@@ -459,6 +460,118 @@ window.submitAbono = async function() {
 };
 
 // ═══════════════════════════════════════════════
+//  INGRESOS DE INVENTARIO
+//  Suma al stock existente (no lo reemplaza) y
+//  deja un historial en la colección "ingresos"
+// ═══════════════════════════════════════════════
+let activeIngresoProduct = null;
+
+window.openIngresoModal = function(productId) {
+  const p = products.find(x => x.id === productId);
+  if (!p) return;
+  activeIngresoProduct = p;
+
+  document.getElementById('ingModalMeta').textContent = `${p.emoji||'🍬'} ${p.nombre}`;
+  document.getElementById('ingStockActual').textContent = p.stock ?? 0;
+  document.getElementById('ingStockNuevo').textContent = p.stock ?? 0;
+  document.getElementById('ingCantidad').value = '';
+  document.getElementById('ingCosto').value = p.costo ?? '';
+  document.getElementById('ingNota').value = '';
+  document.getElementById('ingresoModalOverlay').classList.add('open');
+};
+
+window.closeIngresoModal = function() {
+  document.getElementById('ingresoModalOverlay').classList.remove('open');
+  activeIngresoProduct = null;
+};
+
+window.updateIngresoPreview = function() {
+  if (!activeIngresoProduct) return;
+  const cantidad = parseInt(document.getElementById('ingCantidad').value) || 0;
+  const actual = Number(activeIngresoProduct.stock) || 0;
+  document.getElementById('ingStockNuevo').textContent = actual + cantidad;
+};
+
+window.submitIngreso = async function() {
+  if (!activeIngresoProduct) return;
+  const cantidad = parseInt(document.getElementById('ingCantidad').value) || 0;
+  const nuevoCosto = document.getElementById('ingCosto').value;
+  const nota = document.getElementById('ingNota').value.trim();
+
+  if (!cantidad || cantidad <= 0) { toast('Ingresa una cantidad válida 📥', 'error'); return; }
+
+  const p = activeIngresoProduct;
+  const stockAnterior = Number(p.stock) || 0;
+  const stockNuevo = stockAnterior + cantidad;
+  const costoUnitario = nuevoCosto !== '' ? Number(nuevoCosto) : Number(p.costo) || 0;
+
+  const btn = document.querySelector('#ingresoModalOverlay .btn-gold');
+  btn.textContent = '⏳ Registrando...'; btn.disabled = true;
+
+  try {
+    // 1. Actualizar stock del producto (y costo si cambió)
+    const updateFields = { stock: stockNuevo };
+    if (nuevoCosto !== '' && Number(nuevoCosto) !== Number(p.costo)) {
+      updateFields.costo = Number(nuevoCosto);
+    }
+    await updateDoc(doc(db, COL_PRODUCTOS, p.id), updateFields);
+
+    // 2. Registrar el ingreso en el historial
+    await addDoc(collection(db, COL_INGRESOS), {
+      timestamp: serverTimestamp(),
+      productoId: p.id,
+      producto: p.nombre,
+      cantidad,
+      costoUnitario,
+      total: cantidad * costoUnitario,
+      stockAnterior,
+      stockNuevo,
+      nota
+    });
+
+    // Actualizar en memoria
+    p.stock = stockNuevo;
+    if (updateFields.costo !== undefined) p.costo = updateFields.costo;
+
+    toast(`📥 Ingreso registrado — +${cantidad} unidades de ${p.nombre}`, 'success');
+    closeIngresoModal();
+    window.renderInventory();
+    buildCatTabs(); renderProducts();
+  } catch(e) {
+    toast('Error al registrar el ingreso', 'error');
+  } finally {
+    btn.textContent = '📥 Registrar ingreso'; btn.disabled = false;
+  }
+};
+
+window.loadIngresosHistorial = async function() {
+  const tbody = document.getElementById('ingresosBody');
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Cargando...</td></tr>';
+  try {
+    const q = query(collection(db, COL_INGRESOS), orderBy('timestamp', 'desc'));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Sin ingresos registrados 📦</td></tr>';
+      return;
+    }
+    tbody.innerHTML = snap.docs.map(d => {
+      const i = d.data();
+      const ts = i.timestamp?.toDate ? i.timestamp.toDate().toLocaleString('es-CO') : '—';
+      return `<tr>
+        <td style="font-size:0.82rem;color:var(--muted)">${ts}</td>
+        <td><strong>${i.producto}</strong></td>
+        <td style="color:var(--success);font-weight:600">+${i.cantidad}</td>
+        <td>${fmtPrice(i.costoUnitario)}</td>
+        <td style="color:var(--gold)">${fmtPrice(i.total)}</td>
+        <td style="font-size:0.8rem;color:var(--muted)">${i.nota || '—'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--accent);padding:40px">Error al cargar historial</td></tr>';
+  }
+};
+
+// ═══════════════════════════════════════════════
 //  RENDER HELPERS (idénticos al original)
 // ═══════════════════════════════════════════════
 function showProductSkeleton() {
@@ -733,7 +846,7 @@ function checkNewOrders() {
 // ─── INVENTARIO ──────────────────────────────────
 window.renderInventory = function() {
   const tbody=document.getElementById('invBody');
-  if(!products.length){tbody.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:40px">Sin datos</td></tr>';return;}
+  if(!products.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Sin datos</td></tr>';return;}
   const maxStock=Math.max(...products.map(p=>Number(p.stock)||0),1);
   tbody.innerHTML=products.map(p=>{
     const stock=Number(p.stock); const pct=Math.round((stock/maxStock)*100);
@@ -747,6 +860,7 @@ window.renderInventory = function() {
         <span style="font-weight:600">${stock}</span></div></td>
       <td><span class="badge ${stock===0?'badge-pending':stock<=5?'badge-pending':'badge-delivered'}">
         ${stock===0?'❌ Agotado':stock<=5?'⚠️ Bajo':'✅ OK'}</span></td>
+      <td><button class="btn btn-gold btn-sm" onclick="openIngresoModal('${p.id}')">📥 Ingresar</button></td>
     </tr>`;
   }).join('');
 };
@@ -892,11 +1006,20 @@ function updateQsSummary() {
 
 // ─── TABS ────────────────────────────────────────
 window.switchTab = function(name,btn) {
+  // Historial de ingresos es una sub-vista de Inventario, no un tab del menú principal
+  if (name === 'historial-ingresos' || name === 'inventario') {
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+    document.getElementById('tabInventario').classList.add('active');
+    document.getElementById('tab-'+name).classList.add('active');
+    if (name === 'inventario') window.renderInventory();
+    if (name === 'historial-ingresos') window.loadIngresosHistorial();
+    return;
+  }
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
-  if(name==='inventario') window.renderInventory();
   if(name==='creditos') window.loadCredits();
   if(name==='venta-rapida') window.renderQuickSaleGrid();
 };
@@ -1730,6 +1853,10 @@ loadProducts();
 
       <!-- TAB: Inventario -->
       <div class="tab-content" id="tab-inventario">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <div style="font-size:0.82rem;color:var(--muted)">Registra ingresos de mercancía para aumentar el stock</div>
+          <button class="btn btn-outline btn-sm" onclick="switchTab('historial-ingresos')">📜 Ver historial de ingresos</button>
+        </div>
         <div class="table-wrap">
           <table class="inv-table">
             <thead>
@@ -1739,10 +1866,36 @@ loadProducts();
                 <th>Costo</th>
                 <th>Stock</th>
                 <th>Estado</th>
+                <th>Acción</th>
               </tr>
             </thead>
             <tbody id="invBody">
-              <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:40px">Cargando...</td></tr>
+              <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB: Historial de Ingresos (oculta, accesible desde botón) -->
+      <div class="tab-content" id="tab-historial-ingresos">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div style="font-family:Poppins;font-weight:700;font-size:1rem">📜 Historial de Ingresos</div>
+          <button class="btn btn-outline btn-sm" onclick="switchTab('inventario')">← Volver a Inventario</button>
+        </div>
+        <div class="table-wrap">
+          <table class="inv-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Producto</th>
+                <th>Cantidad</th>
+                <th>Costo unit.</th>
+                <th>Total</th>
+                <th>Nota</th>
+              </tr>
+            </thead>
+            <tbody id="ingresosBody">
+              <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Sin ingresos registrados</td></tr>
             </tbody>
           </table>
         </div>
@@ -1889,6 +2042,45 @@ loadProducts();
       <div class="abono-divider">Historial</div>
       <div class="credit-timeline" id="cModalTimeline">
         <div class="credit-empty">Sin movimientos</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL INGRESO DE STOCK ===== -->
+<div class="credit-modal-overlay" id="ingresoModalOverlay" onclick="if(event.target===this)closeIngresoModal()">
+  <div class="credit-modal">
+    <div class="credit-modal-header">
+      <div>
+        <h3 id="ingModalName">📥 Registrar ingreso</h3>
+        <div class="cmeta" id="ingModalMeta">—</div>
+      </div>
+      <button class="close-btn" onclick="closeIngresoModal()">✕</button>
+    </div>
+    <div class="credit-modal-body">
+      <div class="credit-balance-row">
+        <div>
+          <div class="credit-balance-label">Stock actual</div>
+          <div class="credit-balance-val" id="ingStockActual" style="color:var(--text)">—</div>
+        </div>
+        <div style="text-align:right">
+          <div class="credit-balance-label">Stock nuevo</div>
+          <div class="credit-balance-val" id="ingStockNuevo" style="color:var(--success)">—</div>
+        </div>
+      </div>
+
+      <div class="abono-form">
+        <div class="form-group" style="margin:0">
+          <label>Cantidad que ingresa</label>
+          <input type="number" id="ingCantidad" placeholder="Ej: 20" min="1" inputmode="numeric"
+            oninput="updateIngresoPreview()">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Costo unitario <span style="color:var(--muted);font-weight:400">(opcional — deja igual si no cambió)</span></label>
+          <input type="number" id="ingCosto" placeholder="Costo por unidad $" min="0" inputmode="numeric">
+        </div>
+        <textarea id="ingNota" placeholder="Nota opcional (ej: proveedor, factura #123)"></textarea>
+        <button class="btn btn-gold" onclick="submitIngreso()" style="width:100%;padding:11px">📥 Registrar ingreso</button>
       </div>
     </div>
   </div>
