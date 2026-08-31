@@ -23,7 +23,8 @@ import {
   query, orderBy, serverTimestamp, where
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import {
-  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+  setPersistence, browserSessionPersistence
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 const firebaseConfig = {
@@ -138,8 +139,13 @@ window.checkAdmin = async function() {
   }
 
   try {
+    // Sesión solo dura mientras el navegador esté abierto — clave para PC compartido.
+    // Al cerrar el navegador (no solo la pestaña), Firebase olvida la sesión sola,
+    // así ningún cliente que use el equipo después hereda el acceso de admin.
+    await setPersistence(auth, browserSessionPersistence);
     await signInWithEmailAndPassword(auth, email, pass);
     clearLoginAttempts();
+    requestNotificationPermission();
     // onAuthStateChanged lo maneja desde aquí
   } catch(e) {
     const attempts = recordFailedAttempt();
@@ -162,6 +168,8 @@ window.logoutAdmin = async function() {
   document.getElementById('adminPanel').style.display = 'none';
   document.getElementById('adminPassInput').value = '';
   document.getElementById('adminEmail').value = '';
+  document.title = ORIGINAL_TITLE;
+  lastOrderCount = 0;
   showStore();
 };
 
@@ -169,11 +177,17 @@ window.logoutAdmin = async function() {
 onAuthStateChanged(auth, user => {
   if (user) {
     adminLoggedIn = true;
+    requestNotificationPermission();
+    // Iniciar listeners en segundo plano siempre — así las alertas
+    // funcionan aunque el admin esté viendo la tienda, no solo el panel
+    startRealtimeListeners();
     if (document.getElementById('adminView').classList.contains('active')) {
-      showAdminPanel();
+      document.getElementById('adminLogin').style.display = 'none';
+      document.getElementById('adminPanel').style.display = 'block';
     }
   } else {
     adminLoggedIn = false;
+    stopRealtimeListeners();
   }
 });
 
@@ -832,16 +846,92 @@ function updateStats() {
   if(credits.length) updateCreditStats();
 }
 
-function checkNewOrders() {
-  const pending=orders.filter(o=>o.estado!=='Entregado');
-  if(pending.length>lastOrderCount&&lastOrderCount>0){
-    const newest=pending[0];
-    document.getElementById('newOrderName').textContent=newest.cliente;
-    document.getElementById('newOrderAlert').classList.add('show');
-    setTimeout(()=>document.getElementById('newOrderAlert').classList.remove('show'),8000);
+// ═══════════════════════════════════════════════
+//  SISTEMA DE ALERTAS — pedidos pendientes
+//  Sonido + Notificación del navegador + Título de pestaña + Badge visual
+// ═══════════════════════════════════════════════
+const ORIGINAL_TITLE = document.title;
+let notificationSound = null;
+
+function getNotificationSound() {
+  if (!notificationSound) {
+    // Tono corto generado con Web Audio API — no requiere archivo externo
+    notificationSound = () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const playBeep = (freq, start, dur) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type = 'sine'; osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.15, ctx.currentTime + start);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+          osc.start(ctx.currentTime + start);
+          osc.stop(ctx.currentTime + start + dur);
+        };
+        playBeep(880, 0, 0.15);
+        playBeep(1100, 0.18, 0.18);
+      } catch(e) { /* audio no disponible — silenciar */ }
+    };
   }
-  lastOrderCount=pending.length;
+  return notificationSound;
 }
+
+function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function showBrowserNotification(cliente, productos) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification('🍬 Nuevo pedido — Mekatikos', {
+      body: `${cliente}\n${productos}`,
+      icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🍬</text></svg>',
+      tag: 'mekatikos-pedido',
+      requireInteraction: true
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
+}
+
+function updateTabTitle(pendingCount) {
+  document.title = pendingCount > 0
+    ? `(${pendingCount}) Mekatikos — Pedido${pendingCount!==1?'s':''} pendiente${pendingCount!==1?'s':''}`
+    : ORIGINAL_TITLE;
+}
+
+function updatePendingBadge(pendingCount) {
+  const badge = document.getElementById('pendingOrdersBadge');
+  if (!badge) return;
+  if (pendingCount > 0) {
+    badge.textContent = pendingCount;
+    badge.style.display = 'flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function checkNewOrders() {
+  const pending = orders.filter(o => o.estado !== 'Entregado');
+
+  // Badge y título siempre reflejan el estado actual
+  updatePendingBadge(pending.length);
+  updateTabTitle(pending.length);
+
+  // Alerta activa (sonido + notificación) solo cuando aumenta el conteo
+  if (pending.length > lastOrderCount && lastOrderCount > 0) {
+    const newest = pending[0];
+    document.getElementById('newOrderName').textContent = newest.cliente;
+    document.getElementById('newOrderAlert').classList.add('show');
+    setTimeout(() => document.getElementById('newOrderAlert').classList.remove('show'), 8000);
+
+    getNotificationSound()();
+    showBrowserNotification(newest.cliente, newest.productos);
+  }
+  lastOrderCount = pending.length;
+}
+
 
 // ─── INVENTARIO ──────────────────────────────────
 window.renderInventory = function() {
@@ -1679,7 +1769,10 @@ loadProducts();
     <span style="margin-left:4px;font-size:1.2rem;">🍬</span>
   </div>
   <div class="header-actions" id="headerActions">
-    <button class="btn btn-outline btn-sm" onclick="showAdmin()">⚙️ Admin</button>
+    <button class="btn btn-outline btn-sm" onclick="showAdmin()" style="position:relative">
+      ⚙️ Admin
+      <span id="pendingOrdersBadge" style="display:none;position:absolute;top:-6px;right:-6px;background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;border:2px solid var(--panel)"></span>
+    </button>
     <button class="btn btn-primary btn-sm" onclick="openCart()" id="cartBtn">
       🛒 Carrito <span class="cart-badge" id="cartCount">0</span>
     </button>
@@ -1691,7 +1784,7 @@ loadProducts();
   <div class="hero">
     <span class="hero-emoji">🍭🍫🍬</span>
     <h1><span class="hi">Anto</span><span class="lo">jitos</span> para tu día</h1>
-    <p>Tu tienda favorita a un solo clic</p>
+    <p>Tu tienda favorita a tan sólo un Clic</p>
   </div>
 
   <!-- Search + Category filters -->
