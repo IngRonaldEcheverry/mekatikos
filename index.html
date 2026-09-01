@@ -1036,10 +1036,36 @@ window.closeCreditModal = function() {
 
 // ─── VENTA RÁPIDA ───────────────────────────────
 let qsCart={}, qsPayMethod='Efectivo';
+let qsSearchQuery = '';
+
+window.qsOnSearch = function(val) {
+  qsSearchQuery = val.trim().toLowerCase();
+  document.getElementById('qsSearchClear').classList.toggle('visible', val.length > 0);
+  window.renderQuickSaleGrid();
+};
+window.qsClearSearch = function() {
+  qsSearchQuery = '';
+  document.getElementById('qsSearchInput').value = '';
+  document.getElementById('qsSearchClear').classList.remove('visible');
+  window.renderQuickSaleGrid();
+};
+
 window.renderQuickSaleGrid = function() {
   const grid=document.getElementById('qsGrid');
   if(!products.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Sin productos</div>';return;}
-  grid.innerHTML=products.map(p=>{
+
+  const filtered = qsSearchQuery
+    ? products.filter(p => p.nombre.toLowerCase().includes(qsSearchQuery))
+    : products;
+
+  if (!filtered.length) {
+    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">
+      🔍 No encontramos "<strong>${qsSearchQuery}</strong>"</div>`;
+    updateQsSummary();
+    return;
+  }
+
+  grid.innerHTML=filtered.map(p=>{
     const oos=Number(p.stock)<=0, qty=qsCart[p.nombre]||0;
     const raw=(p.imagen||p.emoji||'').toString().trim();
     let imgHtml=`<span style="font-size:1.8rem">🍬</span>`;
@@ -1876,6 +1902,13 @@ loadProducts();
       <div class="tab-content" id="tab-venta-rapida">
         <div class="quick-sale-panel">
           <h3>⚡ Venta Rápida <span style="font-size:0.78rem;color:var(--muted);font-family:Inter,sans-serif;font-weight:400">— Sin datos del cliente, descuenta inventario al confirmar</span></h3>
+          <div class="search-wrap" style="margin-bottom:14px">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="search-input" id="qsSearchInput"
+              placeholder="Buscar producto... ej: Oreo, Chocolatina"
+              oninput="qsOnSearch(this.value)">
+            <button class="search-clear" id="qsSearchClear" onclick="qsClearSearch()">✕</button>
+          </div>
           <div class="qs-grid" id="qsGrid">
             <div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Cargando productos...</div>
           </div>
