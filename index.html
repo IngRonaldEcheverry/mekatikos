@@ -50,6 +50,30 @@ const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
 const COL_INGRESOS  = 'ingresos';
 
+// ─── NOTIFICACIÓN WHATSAPP (CallMeBot) ──────────
+// Servicio gratuito no oficial. Configura estos 2 valores
+// siguiendo las instrucciones que te compartió Claude.
+// ⚠️ Estas credenciales quedan visibles en el código fuente —
+// riesgo aceptado: alguien podría enviar mensajes falsos usando
+// esta clave, pero no compromete datos de la tienda.
+const WHATSAPP_PHONE  = 'TU_NUMERO_SIN_MAS_NI_ESPACIOS'; // ej: 573001234567
+const WHATSAPP_APIKEY = 'TU_APIKEY_DE_CALLMEBOT';
+
+async function sendWhatsAppNotification(cliente, piso, area, productos, total, pago) {
+  if (!WHATSAPP_PHONE || WHATSAPP_PHONE.startsWith('TU_')) return; // no configurado aún
+  const mensaje =
+    `🍬 *Nuevo pedido - Mekatikos*\n\n` +
+    `👤 ${cliente}\n` +
+    `📍 Piso ${piso} · ${area}\n` +
+    `🛍️ ${productos}\n` +
+    `💰 ${fmtPrice(total)}\n` +
+    `💳 ${pago}`;
+  const url = `https://api.callmebot.com/whatsapp.php?phone=${WHATSAPP_PHONE}&text=${encodeURIComponent(mensaje)}&apikey=${WHATSAPP_APIKEY}`;
+  try {
+    await fetch(url, { mode: 'no-cors' }); // fire-and-forget, no se puede leer la respuesta
+  } catch(e) { /* si falla, no interrumpe el flujo del pedido */ }
+}
+
 // ─── 3. ESTADO GLOBAL ───────────────────────────
 let cart         = {};
 let products     = [];
@@ -65,6 +89,20 @@ let lastOrderCount = 0;
 
 // ─── 4. CONSTANTES ──────────────────────────────
 const CAT_CONFIG = { 'Dulces':'🍬', 'Galletas':'🍪', 'Mecato':'🥔' };
+
+// Relación área → piso, para autocompletar el campo Piso al elegir Área
+const AREA_PISO = {
+  'Planeación':              '10',
+  'Aseguramiento':           '10',
+  'Salud Pública':           '10',
+  'Vigilancia SP':           '10',
+  'Gestión de Salud':        '11',
+  'Jurídica':                '11',
+  'Observatorio':            '11',
+  'Financiero':              '11',
+  'Defensoría del Paciente': '1',
+  'Participación Social':    '1',
+};
 
 const FIADOS = [
   { nombre: 'Julián',         piso: '11', area: 'Observatorio' },
@@ -318,6 +356,9 @@ window.submitOrder = async function() {
       });
     }
 
+    // Notificar por WhatsApp a la tienda — no bloquea el flujo si falla
+    sendWhatsAppNotification(name, piso, area, productosStr, total, pagoStr);
+
     cart = {};
     updateCartBadge();
     closeCart();
@@ -366,6 +407,16 @@ window.markDelivered = async function(orderId, productosEncoded) {
   }
 };
 
+window.rejectOrder = async function(orderId, clienteNombre) {
+  if (!confirm(`¿Confirmas que el pedido de ${clienteNombre} NO se entregó?\n\nQuedará marcado como Rechazado y no afectará el inventario.`)) return;
+  try {
+    await updateDoc(doc(db, COL_PEDIDOS, orderId), { estado: 'Rechazado' });
+    toast('❌ Pedido rechazado', 'success');
+  } catch(e) {
+    toast('Error al rechazar el pedido', 'error');
+  }
+};
+
 // ═══════════════════════════════════════════════
 //  VENTA RÁPIDA (admin)
 // ═══════════════════════════════════════════════
@@ -400,21 +451,21 @@ window.submitQuickSale = async function() {
       timestamp: serverTimestamp(),
       cliente: clienteLabel, piso: pisoLabel, area: areaLabel,
       productos: productosStr, total, pago: esFiado?'Fiar / Crédito':qsPayMethod,
-      estado: esFiado ? 'Pedido' : 'Entregado'
+      estado: 'Entregado' // Venta Rápida siempre es entrega inmediata, sin importar el método de pago
     });
 
-    if (!esFiado) {
-      // Descontar stock inmediatamente
-      for (const item of items) {
-        const p = products.find(x=>x.nombre===item.nombre);
-        if (p&&p.id) {
-          const newStock = Math.max(0,(Number(p.stock)||0)-item.qty);
-          await updateDoc(doc(db,COL_PRODUCTOS,p.id),{ stock:newStock });
-          p.stock = newStock;
-        }
+    // Descontar stock inmediatamente — aplica a todos los métodos, incluido Fiar
+    for (const item of items) {
+      const p = products.find(x=>x.nombre===item.nombre);
+      if (p&&p.id) {
+        const newStock = Math.max(0,(Number(p.stock)||0)-item.qty);
+        await updateDoc(doc(db,COL_PRODUCTOS,p.id),{ stock:newStock });
+        p.stock = newStock;
       }
-    } else {
-      // Registrar en créditos
+    }
+
+    // Si es Fiar, además queda registrada la deuda en Créditos
+    if (esFiado) {
       await addDoc(collection(db, COL_CREDITOS), {
         timestamp: serverTimestamp(),
         cliente: fiadoNombre, piso: pisoLabel, area: areaLabel,
@@ -583,6 +634,61 @@ window.loadIngresosHistorial = async function() {
     }).join('');
   } catch(e) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--accent);padding:40px">Error al cargar historial</td></tr>';
+  }
+};
+
+// ═══════════════════════════════════════════════
+//  NUEVO PRODUCTO
+// ═══════════════════════════════════════════════
+window.openNewProductModal = function() {
+  document.getElementById('npNombre').value = '';
+  document.getElementById('npPrecio').value = '';
+  document.getElementById('npCosto').value = '';
+  document.getElementById('npStock').value = '';
+  document.getElementById('npCategoria').value = 'Dulces';
+  document.getElementById('npImagen').value = '';
+  document.getElementById('newProductModalOverlay').classList.add('open');
+};
+
+window.closeNewProductModal = function() {
+  document.getElementById('newProductModalOverlay').classList.remove('open');
+};
+
+window.submitNewProduct = async function() {
+  const nombre    = document.getElementById('npNombre').value.trim();
+  const precio    = parseFloat(document.getElementById('npPrecio').value);
+  const costo     = parseFloat(document.getElementById('npCosto').value);
+  const stock     = parseInt(document.getElementById('npStock').value);
+  const categoria = document.getElementById('npCategoria').value;
+  const imagen    = document.getElementById('npImagen').value.trim();
+
+  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+  if (isNaN(precio) || precio < 0) { toast('Ingresa un precio de venta válido', 'error'); return; }
+  if (isNaN(costo) || costo < 0) { toast('Ingresa un costo válido', 'error'); return; }
+  if (isNaN(stock) || stock < 0) { toast('Ingresa un stock inicial válido', 'error'); return; }
+
+  if (products.some(p => p.nombre.toLowerCase() === nombre.toLowerCase())) {
+    toast('Ya existe un producto con ese nombre', 'error'); return;
+  }
+
+  const btn = document.querySelector('#newProductModalOverlay .btn-gold');
+  btn.textContent = '⏳ Creando...'; btn.disabled = true;
+
+  try {
+    const docData = { nombre, precio, costo, stock, categoria };
+    if (imagen) docData.imagen = imagen;
+
+    const ref = await addDoc(collection(db, COL_PRODUCTOS), docData);
+    products.push({ id: ref.id, ...docData });
+
+    toast(`✅ ${nombre} creado correctamente`, 'success');
+    closeNewProductModal();
+    buildCatTabs(); renderProducts();
+    window.renderInventory();
+  } catch(e) {
+    toast('Error al crear el producto', 'error');
+  } finally {
+    btn.textContent = '➕ Crear producto'; btn.disabled = false;
   }
 };
 
@@ -780,8 +886,9 @@ window.selectPay = function(method) {
     document.getElementById('fPiso').value=''; document.getElementById('fArea').value='';
   } else {
     nw.innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
-    document.getElementById('fPiso').readOnly=false; document.getElementById('fPiso').style.opacity='';
+    document.getElementById('fPiso').readOnly=true; document.getElementById('fPiso').style.opacity=''; // sigue siendo automático, no manual
     document.getElementById('fArea').disabled=false; document.getElementById('fArea').style.opacity='';
+    // No se limpia el área/piso aquí — solo se resetea al enviar el pedido o al elegir Fiar
   }
 };
 window.autoFillFiado = function(nombre) {
@@ -789,6 +896,11 @@ window.autoFillFiado = function(nombre) {
   document.getElementById('fPiso').value=f.piso;
   const ae=document.getElementById('fArea');
   for(let i=0;i<ae.options.length;i++){if(ae.options[i].text===f.area||ae.options[i].value===f.area){ae.selectedIndex=i;break;}}
+};
+window.autoFillPisoFromArea = function(area) {
+  const piso = AREA_PISO[area] || '';
+  document.getElementById('fPiso').value = piso;
+  document.getElementById('fPiso').placeholder = piso ? '' : 'Elige un área';
 };
 window.calcChange = function() {
   const total=Object.values(cart).reduce((s,v)=>s+v.price*v.qty,0);
@@ -803,7 +915,8 @@ window.calcChange = function() {
 
 function resetOrderForm() {
   document.getElementById('nameFieldWrap').innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
-  document.getElementById('fPiso').value=''; document.getElementById('fPiso').readOnly=false; document.getElementById('fPiso').style.opacity='';
+  document.getElementById('fPiso').value=''; document.getElementById('fPiso').readOnly=true; document.getElementById('fPiso').style.opacity='';
+  document.getElementById('fPiso').placeholder='Elige un área';
   document.getElementById('fArea').value=''; document.getElementById('fArea').disabled=false; document.getElementById('fArea').style.opacity='';
   document.getElementById('fPaga').value=''; document.getElementById('changeResult').style.display='none';
   selectedPay='Efectivo';
@@ -819,16 +932,27 @@ function renderOrders() {
   const tbody=document.getElementById('ordersBody');
   if(!orders.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:40px">Sin pedidos aún 🍃</td></tr>';return;}
   tbody.innerHTML=orders.map(o=>{
-    const delivered=o.estado==='Entregado';
+    const delivered = o.estado==='Entregado';
+    const rejected  = o.estado==='Rechazado';
+    const pending   = !delivered && !rejected;
     const ts=o.timestamp?.toDate?o.timestamp.toDate().toLocaleString('es-CO'):(o.timestamp||'');
+    const safeName = (o.cliente||'').replace(/'/g,"\\'");
+    let badgeClass = 'badge-pending', badgeLabel = '⏳ Pedido';
+    if (delivered) { badgeClass='badge-delivered'; badgeLabel='✅ Entregado'; }
+    if (rejected)  { badgeClass='badge-rejected';  badgeLabel='❌ Rechazado'; }
     return `<tr>
       <td><strong>${o.cliente}</strong><br><small style="color:var(--muted)">${ts}</small></td>
       <td>Piso ${o.piso} · ${o.area}</td>
       <td style="max-width:200px;word-break:break-word;font-size:0.82rem">${o.productos}</td>
       <td><strong style="color:var(--gold)">${fmtPrice(o.total)}</strong></td>
       <td>${o.pago?.includes('Transferencia')||o.pago==='Transferencia'?'📲':'💵'} ${o.pago}</td>
-      <td><span class="badge ${delivered?'badge-delivered':'badge-pending'}">${delivered?'✅ Entregado':'⏳ Pedido'}</span></td>
-      <td>${delivered?'—':`<button class="btn btn-success btn-sm" onclick="markDelivered('${o.id}','${encodeURIComponent(o.productos)}')">✅ Entregar</button>`}</td>
+      <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
+      <td>${pending
+        ? `<div style="display:flex;gap:6px">
+            <button class="btn btn-success btn-sm" onclick="markDelivered('${o.id}','${encodeURIComponent(o.productos)}')">✅ Entregar</button>
+            <button class="btn btn-outline btn-sm" style="border-color:var(--accent);color:var(--accent)" onclick="rejectOrder('${o.id}','${safeName}')">❌ Rechazar</button>
+          </div>`
+        : '—'}</td>
     </tr>`;
   }).join('');
 }
@@ -840,7 +964,7 @@ function updateStats() {
     return ts===today;
   });
   document.getElementById('statToday').textContent=todayO.length;
-  document.getElementById('statPending').textContent=orders.filter(o=>o.estado!=='Entregado').length;
+  document.getElementById('statPending').textContent=orders.filter(o=>o.estado!=='Entregado'&&o.estado!=='Rechazado').length;
   document.getElementById('statDone').textContent=orders.filter(o=>o.estado==='Entregado').length;
   const rev=todayO.filter(o=>o.estado==='Entregado').reduce((s,o)=>s+Number(o.total||0),0);
   document.getElementById('statRevenue').textContent=fmtPrice(rev);
@@ -914,7 +1038,7 @@ function updatePendingBadge(pendingCount) {
 }
 
 function checkNewOrders() {
-  const pending = orders.filter(o => o.estado !== 'Entregado');
+  const pending = orders.filter(o => o.estado !== 'Entregado' && o.estado !== 'Rechazado');
 
   // Badge y título siempre reflejan el estado actual
   updatePendingBadge(pending.length);
@@ -1544,6 +1668,7 @@ loadProducts();
   }
   .badge-pending { background: rgba(245,166,35,0.15); color: var(--gold); }
   .badge-delivered { background: rgba(46,204,113,0.15); color: var(--success); }
+  .badge-rejected { background: rgba(233,69,96,0.15); color: var(--accent); }
   .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
   .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
   .stat-card {
@@ -1982,7 +2107,10 @@ loadProducts();
       <div class="tab-content" id="tab-inventario">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
           <div style="font-size:0.82rem;color:var(--muted)">Registra ingresos de mercancía para aumentar el stock</div>
-          <button class="btn btn-outline btn-sm" onclick="switchTab('historial-ingresos')">📜 Ver historial de ingresos</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-gold btn-sm" onclick="openNewProductModal()">➕ Nuevo producto</button>
+            <button class="btn btn-outline btn-sm" onclick="switchTab('historial-ingresos')">📜 Ver historial de ingresos</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table class="inv-table">
@@ -2066,14 +2194,13 @@ loadProducts();
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group">
-          <label>Piso</label>
-          <input type="number" id="fPiso" placeholder="Ej: 3" min="1" max="14"
-            inputmode="numeric" pattern="[0-9]*"
-            oninput="this.value=this.value.replace(/[^0-9]/g,'');if(parseInt(this.value)>14)this.value=14;if(parseInt(this.value)<1&&this.value!='')this.value=1">
+          <label>Piso <span style="color:var(--muted);font-weight:400">(automático)</span></label>
+          <input type="text" id="fPiso" placeholder="Elige un área" readonly
+            style="background:var(--bg);cursor:not-allowed">
         </div>
         <div class="form-group">
           <label>Área</label>
-          <select id="fArea">
+          <select id="fArea" onchange="autoFillPisoFromArea(this.value)">
             <option value="">— Selecciona —</option>
             <option>Planeación</option>
             <option>Gestión de Salud</option>
@@ -2083,6 +2210,7 @@ loadProducts();
             <option>Salud Pública</option>
             <option>Financiero</option>
             <option>Aseguramiento</option>
+            <option>Vigilancia SP</option>
             <option>Observatorio</option>
           </select>
         </div>
@@ -2213,8 +2341,59 @@ loadProducts();
   </div>
 </div>
 
+<!-- ===== MODAL NUEVO PRODUCTO ===== -->
+<div class="credit-modal-overlay" id="newProductModalOverlay" onclick="if(event.target===this)closeNewProductModal()">
+  <div class="credit-modal">
+    <div class="credit-modal-header">
+      <div>
+        <h3>➕ Nuevo producto</h3>
+        <div class="cmeta">Se agrega directamente a Firestore</div>
+      </div>
+      <button class="close-btn" onclick="closeNewProductModal()">✕</button>
+    </div>
+    <div class="credit-modal-body">
+      <div class="abono-form">
+        <div class="form-group" style="margin:0">
+          <label>Nombre del producto <span style="color:var(--accent)">*</span></label>
+          <input type="text" id="npNombre" placeholder="Ej: Chocolatina Jet">
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Precio de venta <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="npPrecio" placeholder="$" min="0" inputmode="numeric">
+          </div>
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Costo <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="npCosto" placeholder="$" min="0" inputmode="numeric">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Stock inicial <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="npStock" placeholder="0" min="0" inputmode="numeric">
+          </div>
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Categoría <span style="color:var(--accent)">*</span></label>
+            <select id="npCategoria" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none;width:100%">
+              <option value="Dulces">🍬 Dulces</option>
+              <option value="Galletas">🍪 Galletas</option>
+              <option value="Mecato">🥔 Mecato</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Imagen o emoji <span style="color:var(--muted);font-weight:400">(link de Drive, URL o emoji como 🍬)</span></label>
+          <input type="text" id="npImagen" placeholder="https://drive.google.com/... o 🍬">
+        </div>
+        <button class="btn btn-gold" onclick="submitNewProduct()" style="width:100%;padding:11px">➕ Crear producto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== TOAST AREA ===== -->
 <div class="toast-container" id="toastContainer"></div>
+
 
 
 </body>
