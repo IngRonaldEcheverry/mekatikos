@@ -49,6 +49,7 @@ const COL_PRODUCTOS = 'productos';
 const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
 const COL_INGRESOS  = 'ingresos';
+const COL_FIADOS    = 'fiados';
 
 // ─── NOTIFICACIÓN WHATSAPP (Green API) ──────────
 // Servicio con plan gratuito para enviarte notificaciones a tu
@@ -121,23 +122,10 @@ const AREA_PISO = {
   'Participación Social':    '1',
 };
 
-const FIADOS = [
-  { nombre: 'Julián',         piso: '11', area: 'Observatorio' },
-  { nombre: 'Junior',         piso: '11', area: 'Observatorio' },
-  { nombre: 'Eduardo',        piso: '11', area: 'Observatorio' },
-  { nombre: 'Lucy',           piso: '11', area: 'Observatorio' },
-  { nombre: 'Katherine',      piso: '11', area: 'Observatorio' },
-  { nombre: 'Kattia',         piso: '11', area: 'Observatorio' },
-  { nombre: 'Raúl',           piso: '11', area: 'Observatorio' },
-  { nombre: 'Mejia',          piso: '11', area: 'Observatorio' },
-  { nombre: 'Jhon C',         piso: '11', area: 'Observatorio' },
-  { nombre: 'Jorge',          piso: '11', area: 'Observatorio' },
-  { nombre: 'Maria Isabel D', piso: '11', area: 'Jurídica'     },
-  { nombre: 'Ana Karina',     piso: '11', area: 'Jurídica'     },
-  { nombre: 'Bibiana O',      piso: '11', area: 'Jurídica'     },
-  { nombre: 'Claudia M',      piso: '11', area: 'Jurídica'     },
-  { nombre: 'Alexandra C',      piso: '10', area: 'Salud Pública'     },
-];
+// FIADOS ahora vive en Firestore (colección 'fiados') y se gestiona
+// completamente desde el panel admin. Este array se llena en tiempo
+// real mediante loadFiados() — ya no se edita aquí en el código.
+let FIADOS = [];
 
 const DEMO_PRODUCTS = [
   { id:'d1', emoji:'🍫', nombre:'Chocolatina Jet',  precio:2000, costo:1200, stock:15, categoria:'Dulces'   },
@@ -289,6 +277,22 @@ window.loadProducts = async function() {
   }
   buildCatTabs();
   renderProducts();
+};
+
+// ═══════════════════════════════════════════════
+//  FIADOS — clientes autorizados para crédito
+// ═══════════════════════════════════════════════
+window.loadFiados = async function() {
+  try {
+    const snap = await getDocs(collection(db, COL_FIADOS));
+    FIADOS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    FIADOS.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
+  } catch(e) {
+    FIADOS = [];
+  }
+  if (document.getElementById('tab-fiados')?.classList.contains('active')) {
+    window.renderFiadosList();
+  }
 };
 
 // ═══════════════════════════════════════════════
@@ -1391,6 +1395,139 @@ window.closeCreditModal = function() {
   activeCreditClient=null;
 };
 
+// ═══════════════════════════════════════════════
+//  FIADOS — CRUD desde el panel admin
+// ═══════════════════════════════════════════════
+let fiadoSearchQuery = '';
+let activeFiado = null; // null = creando nuevo, objeto = editando existente
+
+window.fiadoOnSearch = function(val) {
+  fiadoSearchQuery = val.trim().toLowerCase();
+  document.getElementById('fiadoSearchClear').classList.toggle('visible', val.length > 0);
+  window.renderFiadosList();
+};
+window.fiadoClearSearch = function() {
+  fiadoSearchQuery = '';
+  document.getElementById('fiadoSearchInput').value = '';
+  document.getElementById('fiadoSearchClear').classList.remove('visible');
+  window.renderFiadosList();
+};
+
+window.renderFiadosList = function() {
+  const tbody = document.getElementById('fiadosBody');
+  if (!tbody) return;
+
+  const filtered = fiadoSearchQuery
+    ? FIADOS.filter(f => f.nombre.toLowerCase().includes(fiadoSearchQuery))
+    : FIADOS;
+
+  if (!FIADOS.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:40px">Sin fiados registrados aún</td></tr>';
+    return;
+  }
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:40px">🔍 No encontramos "<strong>${fiadoSearchQuery}</strong>"</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(f => `
+    <tr>
+      <td><strong>${f.nombre}</strong></td>
+      <td>${f.piso}</td>
+      <td>${f.area}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="openFiadoModal('${f.id}')">✏️ Editar</button></td>
+    </tr>`).join('');
+};
+
+window.autoFillFiadoModalPiso = function(area) {
+  const piso = AREA_PISO[area] || '';
+  document.getElementById('fiPiso').value = piso;
+  document.getElementById('fiPiso').placeholder = piso ? '' : 'Elige un área';
+};
+
+window.openFiadoModal = function(fiadoId) {
+  const deleteBtn = document.getElementById('fiadoDeleteBtn');
+  const submitBtn = document.getElementById('fiadoSubmitBtn');
+
+  if (fiadoId) {
+    activeFiado = FIADOS.find(f => f.id === fiadoId);
+    if (!activeFiado) return;
+    document.getElementById('fiadoModalTitle').textContent = '✏️ Editar fiado';
+    document.getElementById('fiNombre').value = activeFiado.nombre;
+    document.getElementById('fiArea').value = activeFiado.area;
+    document.getElementById('fiPiso').value = activeFiado.piso;
+    submitBtn.textContent = '💾 Guardar cambios';
+    deleteBtn.style.display = 'block';
+  } else {
+    activeFiado = null;
+    document.getElementById('fiadoModalTitle').textContent = '➕ Nuevo fiado';
+    document.getElementById('fiNombre').value = '';
+    document.getElementById('fiArea').value = '';
+    document.getElementById('fiPiso').value = '';
+    document.getElementById('fiPiso').placeholder = 'Elige un área';
+    submitBtn.textContent = '➕ Crear fiado';
+    deleteBtn.style.display = 'none';
+  }
+  document.getElementById('fiadoModalOverlay').classList.add('open');
+};
+
+window.closeFiadoModal = function() {
+  document.getElementById('fiadoModalOverlay').classList.remove('open');
+  activeFiado = null;
+};
+
+window.submitFiado = async function() {
+  const nombre = document.getElementById('fiNombre').value.trim();
+  const area   = document.getElementById('fiArea').value;
+  const piso   = document.getElementById('fiPiso').value;
+
+  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+  if (!area)   { toast('Selecciona un área', 'error'); return; }
+
+  // Evitar duplicados (excluyendo el que se está editando)
+  const dup = FIADOS.find(f => f.nombre.toLowerCase() === nombre.toLowerCase() && f.id !== activeFiado?.id);
+  if (dup) { toast('Ya existe un fiado con ese nombre', 'error'); return; }
+
+  const btn = document.getElementById('fiadoSubmitBtn');
+  btn.disabled = true; btn.textContent = '⏳ Guardando...';
+
+  try {
+    const docData = { nombre, area, piso };
+    if (activeFiado) {
+      await updateDoc(doc(db, COL_FIADOS, activeFiado.id), docData);
+      Object.assign(activeFiado, docData);
+      toast(`✅ ${nombre} actualizado`, 'success');
+    } else {
+      const ref = await addDoc(collection(db, COL_FIADOS), docData);
+      FIADOS.push({ id: ref.id, ...docData });
+      FIADOS.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
+      toast(`✅ ${nombre} agregado a la lista de fiados`, 'success');
+    }
+    closeFiadoModal();
+    window.renderFiadosList();
+  } catch(e) {
+    toast('Error al guardar el fiado', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+window.confirmDeleteFiado = async function() {
+  if (!activeFiado) return;
+  const nombre = activeFiado.nombre;
+  if (!confirm(`¿Eliminar a "${nombre}" de la lista de fiados?\n\nYa no podrá elegir "Fiar" como método de pago.`)) return;
+
+  try {
+    await deleteDoc(doc(db, COL_FIADOS, activeFiado.id));
+    FIADOS = FIADOS.filter(f => f.id !== activeFiado.id);
+    toast(`🗑️ ${nombre} eliminado de fiados`, 'success');
+    closeFiadoModal();
+    window.renderFiadosList();
+  } catch(e) {
+    toast('Error al eliminar el fiado', 'error');
+  }
+};
+
 // ─── VENTA RÁPIDA ───────────────────────────────
 let qsCart={}, qsPayMethod='Efectivo';
 let qsSearchQuery = '';
@@ -1496,6 +1633,7 @@ window.switchTab = function(name,btn) {
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='creditos') window.loadCredits();
   if(name==='venta-rapida') window.renderQuickSaleGrid();
+  if(name==='fiados') window.renderFiadosList();
 };
 
 
@@ -1510,6 +1648,7 @@ function toast(msg,type='success') {
 
 // ─── INICIO ─────────────────────────────────────
 loadProducts();
+loadFiados();
 
 </script>
 <style>
@@ -2328,6 +2467,7 @@ loadProducts();
         <button class="tab-btn active" id="tabPedidos" onclick="switchTab('pedidos',this)">📋 Pedidos</button>
         <button class="tab-btn" id="tabVentaRapida" onclick="switchTab('venta-rapida',this)">⚡ Venta Rápida</button>
         <button class="tab-btn" id="tabCreditos" onclick="switchTab('creditos',this)">📒 Créditos</button>
+        <button class="tab-btn" id="tabFiados" onclick="switchTab('fiados',this)">👥 Fiados</button>
         <button class="tab-btn" id="tabInventario" onclick="switchTab('inventario',this)">📦 Inventario</button>
 
       </div>
@@ -2394,6 +2534,39 @@ loadProducts();
         </div>
         <div class="credit-summary-grid" id="creditGrid">
           <div class="credit-empty">Cargando créditos...</div>
+        </div>
+      </div>
+
+      <!-- TAB: Fiados -->
+      <div class="tab-content" id="tab-fiados">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <div>
+            <div style="font-family:Poppins;font-weight:700;font-size:1rem">👥 Clientes autorizados para fiar</div>
+            <div style="font-size:0.8rem;color:var(--muted);margin-top:2px">Solo estas personas pueden elegir "Fiar" como método de pago</div>
+          </div>
+          <button class="btn btn-gold btn-sm" onclick="openFiadoModal()">➕ Nuevo fiado</button>
+        </div>
+        <div class="search-wrap" style="margin-bottom:16px">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="search-input" id="fiadoSearchInput"
+            placeholder="Buscar fiado..."
+            oninput="fiadoOnSearch(this.value)">
+          <button class="search-clear" id="fiadoSearchClear" onclick="fiadoClearSearch()">✕</button>
+        </div>
+        <div class="table-wrap">
+          <table class="inv-table">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Piso</th>
+                <th>Área</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody id="fiadosBody">
+              <tr><td colspan="4" style="text-align:center;color:var(--muted);padding:40px">Cargando...</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -2773,10 +2946,57 @@ loadProducts();
   </div>
 </div>
 
+<!-- ===== MODAL CREAR/EDITAR FIADO ===== -->
+<div class="credit-modal-overlay" id="fiadoModalOverlay" onclick="if(event.target===this)closeFiadoModal()">
+  <div class="credit-modal">
+    <div class="credit-modal-header">
+      <div>
+        <h3 id="fiadoModalTitle">➕ Nuevo fiado</h3>
+        <div class="cmeta">Solo estas personas pueden elegir "Fiar"</div>
+      </div>
+      <button class="close-btn" onclick="closeFiadoModal()">✕</button>
+    </div>
+    <div class="credit-modal-body">
+      <div class="abono-form">
+        <div class="form-group" style="margin:0">
+          <label>Nombre <span style="color:var(--accent)">*</span></label>
+          <input type="text" id="fiNombre" placeholder="Ej: Julián">
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Área <span style="color:var(--accent)">*</span></label>
+            <select id="fiArea" onchange="autoFillFiadoModalPiso(this.value)"
+              style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none;width:100%">
+              <option value="">— Selecciona —</option>
+              <option>Planeación</option>
+              <option>Gestión de Salud</option>
+              <option>Participación Social</option>
+              <option>Jurídica</option>
+              <option>Defensoría del Paciente</option>
+              <option>Salud Pública</option>
+              <option>Financiero</option>
+              <option>Aseguramiento</option>
+              <option>Observatorio</option>
+              <option>Vigilancia SP</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Piso <span style="color:var(--muted);font-weight:400">(automático)</span></label>
+            <input type="text" id="fiPiso" placeholder="Elige un área" readonly style="background:var(--bg);cursor:not-allowed">
+          </div>
+        </div>
+        <button class="btn btn-gold" onclick="submitFiado()" style="width:100%;padding:11px" id="fiadoSubmitBtn">➕ Crear fiado</button>
+        <button class="btn btn-outline btn-sm" style="width:100%;border-color:var(--accent);color:var(--accent);display:none" id="fiadoDeleteBtn" onclick="confirmDeleteFiado()">🗑️ Eliminar fiado</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== QR MODAL (Nequi) ===== -->
 <div class="qr-modal-overlay" id="qrModalOverlay" onclick="if(event.target===this)closeQrModal()">
   <div class="qr-modal-box">
     <img src="" id="qrModalImg" alt="Código QR Nequi">
+
     <button class="qr-modal-whatsapp" onclick="openWhatsAppProof()">💬 Enviar comprobante por WhatsApp</button>
     <div style="font-size:0.72rem;color:#888;text-align:center">Esto es solo informativo — no es obligatorio</div>
     <button class="qr-modal-close" onclick="closeQrModal()">Cerrar</button>
