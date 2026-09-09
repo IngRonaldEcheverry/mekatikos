@@ -883,13 +883,16 @@ function renderProducts() {
   if(activeCategory==='Todos'&&!searchQuery){
     const groups={};
     filtered.forEach(p=>{ const c=p.categoria||'Otros'; if(!groups[c])groups[c]=[]; groups[c].push(p); });
+    // Orden alfabético dentro de cada categoría — evita que se vea "desordenado"
+    Object.values(groups).forEach(arr => arr.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es')));
     const keys=[...Object.keys(CAT_CONFIG),'Otros','Sin categoría'].filter(k=>groups[k]);
     grid.innerHTML=keys.map(cat=>{
       const icon=CAT_CONFIG[cat]||'📦';
       return `<div class="cat-group-label"><span>${icon} ${cat}</span></div>`+groups[cat].map(productCardHtml).join('');
     }).join('');
   } else {
-    grid.innerHTML=filtered.map(productCardHtml).join('');
+    const sortedFlat = [...filtered].sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
+    grid.innerHTML=sortedFlat.map(productCardHtml).join('');
   }
 }
 
@@ -1696,6 +1699,7 @@ loadProducts();
     text-align: center; gap: 8px;
     transition: transform .2s, border-color .2s;
     position: relative;
+    height: 100%; /* ocupa toda la fila del grid para alinear los botones */
   }
   .product-card:hover { transform: translateY(-4px); border-color: var(--accent); }
   .product-card.out-of-stock { opacity: 0.45; pointer-events: none; }
@@ -1716,7 +1720,11 @@ loadProducts();
     background: var(--bg); border: 2px solid var(--border);
     flex-shrink: 0;
   }
-  .product-name { font-weight: 600; font-size: 0.95rem; }
+  .product-name {
+    font-weight: 600; font-size: 0.95rem;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; min-height: 2.5em; /* siempre reserva espacio para 2 líneas */
+  }
   .product-price {
     font-family: 'Poppins', sans-serif; font-weight: 700;
     color: var(--gold); font-size: 1.1rem;
@@ -1725,7 +1733,7 @@ loadProducts();
   .stock-low { color: #ff9f43; }
   .stock-ok { color: var(--success); }
   .add-btn {
-    margin-top: 6px; width: 100%;
+    margin-top: auto; width: 100%; /* siempre pegado al final de la tarjeta */
     padding: 8px; border-radius: 50px;
     background: var(--accent); color: #fff;
     border: none; font-weight: 600; font-size: 0.82rem;
@@ -1733,7 +1741,7 @@ loadProducts();
   }
   .add-btn:hover { background: #c73652; }
   .qty-control {
-    display: flex; align-items: center; gap: 8px; margin-top: 6px;
+    display: flex; align-items: center; gap: 8px; margin-top: auto; /* igual que add-btn */
   }
   .qty-btn {
     width: 28px; height: 28px; border-radius: 50%; border: none;
