@@ -887,21 +887,31 @@ window.selectPay = function(method) {
   if(method==='Efectivo') { box.classList.add('visible'); }
   else { box.classList.remove('visible'); document.getElementById('fPaga').value=''; document.getElementById('changeResult').style.display='none'; }
   const nw=document.getElementById('nameFieldWrap');
+  const currentField = document.getElementById('fName');
+  const isCurrentlySelect = currentField && currentField.tagName === 'SELECT';
+  const needsRebuild = (method === 'Fiar' && !isCurrentlySelect) || (method !== 'Fiar' && isCurrentlySelect);
+
+  if (needsRebuild) {
+    if(method==='Fiar') {
+      nw.innerHTML=`<label>Cliente autorizado <span style="color:#9b59b6">📒</span></label>
+        <select id="fName" onchange="autoFillFiado(this.value)"
+          style="background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.9rem;outline:none;width:100%;appearance:none;cursor:pointer">
+          <option value="">— Selecciona cliente —</option>
+          ${FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('')}
+        </select>`;
+    } else {
+      nw.innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
+    }
+  }
+
   if(method==='Fiar') {
-    nw.innerHTML=`<label>Cliente autorizado <span style="color:#9b59b6">📒</span></label>
-      <select id="fName" onchange="autoFillFiado(this.value)"
-        style="background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.9rem;outline:none;width:100%;appearance:none;cursor:pointer">
-        <option value="">— Selecciona cliente —</option>
-        ${FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('')}
-      </select>`;
     document.getElementById('fPiso').readOnly=true; document.getElementById('fPiso').style.opacity='0.5';
     document.getElementById('fArea').disabled=true; document.getElementById('fArea').style.opacity='0.5';
     document.getElementById('fPiso').value=''; document.getElementById('fArea').value='';
   } else {
-    nw.innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
     document.getElementById('fPiso').readOnly=true; document.getElementById('fPiso').style.opacity=''; // sigue siendo automático, no manual
     document.getElementById('fArea').disabled=false; document.getElementById('fArea').style.opacity='';
-    // No se limpia el área/piso aquí — solo se resetea al enviar el pedido o al elegir Fiar
+    // No se limpia el área/piso/nombre aquí — solo se resetea al enviar el pedido o al elegir Fiar
   }
 };
 window.autoFillFiado = function(nombre) {
