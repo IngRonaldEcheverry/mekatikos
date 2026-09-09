@@ -1275,35 +1275,63 @@ function getCreditsByClient() {
   const clients={};
   credits.forEach(c=>{
     const key=(c.cliente||'').trim(); if(!key||key==='—') return;
-    if(!clients[key]) clients[key]={cliente:key,piso:c.piso,area:c.area,pedidos:0,abonos:0,entries:[]};
+    if(!clients[key]) clients[key]={cliente:key,piso:c.piso,area:c.area,pedidos:0,abonos:0,entries:[],lastActivity:0};
     const tipo=(c.tipo||'').trim(), monto=Number(c.monto)||0;
     if(tipo==='Pedido') clients[key].pedidos+=monto;
     else if(tipo==='Abono') clients[key].abonos+=monto;
-    const ts=c.timestamp?.toDate?c.timestamp.toDate().toLocaleString('es-CO'):(c.timestamp||'');
-    clients[key].entries.push({...c,tipo,timestamp:ts});
+
+    // Guardar timestamp real (ms) para poder ordenar correctamente, y uno formateado para mostrar
+    const rawMs = c.timestamp?.toDate ? c.timestamp.toDate().getTime() : 0;
+    const displayTs = c.timestamp?.toDate ? c.timestamp.toDate().toLocaleString('es-CO') : (c.timestamp || '');
+    clients[key].entries.push({...c, tipo, timestamp: displayTs, _rawMs: rawMs});
+    if (rawMs > clients[key].lastActivity) clients[key].lastActivity = rawMs;
   });
   return Object.values(clients).sort((a,b)=>(b.pedidos-b.abonos)-(a.pedidos-a.abonos));
 }
+
+// ─── BÚSQUEDA EN CRÉDITOS ────────────────────────
+let creditSearchQuery = '';
+window.creditOnSearch = function(val) {
+  creditSearchQuery = val.trim().toLowerCase();
+  document.getElementById('creditSearchClear').classList.toggle('visible', val.length > 0);
+  renderCreditGrid();
+};
+window.creditClearSearch = function() {
+  creditSearchQuery = '';
+  document.getElementById('creditSearchInput').value = '';
+  document.getElementById('creditSearchClear').classList.remove('visible');
+  renderCreditGrid();
+};
 
 window.loadCredits = function() { renderCreditGrid(); updateCreditStats(); };
 
 function renderCreditGrid() {
   const grid=document.getElementById('creditGrid');
-  const clients=getCreditsByClient();
+  let clients=getCreditsByClient();
+
+  if (creditSearchQuery) {
+    clients = clients.filter(c => c.cliente.toLowerCase().includes(creditSearchQuery));
+  }
+
   if(!clients.length){
-    grid.innerHTML='<div class="credit-empty">Sin créditos registrados 🎉<br><small>Cuando un cliente escoja "Fiar" aparecerá aquí</small></div>';
-    document.getElementById('creditTotalOwed').textContent='$0';
+    grid.innerHTML = creditSearchQuery
+      ? `<div class="credit-empty">🔍 No encontramos "<strong>${creditSearchQuery}</strong>"</div>`
+      : '<div class="credit-empty">Sin créditos registrados 🎉<br><small>Cuando un cliente escoja "Fiar" aparecerá aquí</small></div>';
+    if (!creditSearchQuery) document.getElementById('creditTotalOwed').textContent='$0';
     return;
   }
   grid.innerHTML=clients.map(c=>{
     const balance=c.pedidos-c.abonos;
     const balClass=balance<=0?'clear':balance<c.pedidos?'partial':'owed';
     return `<div class="credit-client-card ${balance<=0?'zero':''}" onclick="openCreditModal('${encodeURIComponent(c.cliente)}')">
-      <div class="credit-client-name">👤 ${c.cliente}</div>
-      <div class="credit-client-meta">Piso ${c.piso} · ${c.area}</div>
-      <div class="credit-client-balance ${balClass}">${balance<=0?'✅ Al día':fmtPrice(balance)}</div>
-      <div style="font-size:.75rem;color:var(--muted);margin-top:2px">
-        ${c.entries.filter(e=>e.tipo==='Pedido').length} pedido(s) · ${c.entries.filter(e=>e.tipo==='Abono').length} abono(s)</div>
+      <div class="ccc-top">
+        <span class="credit-client-name">👤 ${c.cliente}</span>
+        <span class="credit-client-balance ${balClass}">${balance<=0?'✅ Al día':fmtPrice(balance)}</span>
+      </div>
+      <div class="ccc-bottom">
+        <span class="credit-client-meta">Piso ${c.piso} · ${c.area}</span>
+        <span class="ccc-count">${c.entries.filter(e=>e.tipo==='Pedido').length}🛍️ · ${c.entries.filter(e=>e.tipo==='Abono').length}💰</span>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1326,7 +1354,10 @@ window.openCreditModal = function(encodedName) {
   document.getElementById('cModalBalance').style.color=balance<=0?'var(--success)':balance<client.pedidos?'var(--gold)':'var(--accent)';
   document.getElementById('cModalTotal').textContent=fmtPrice(client.pedidos);
   document.getElementById('cModalPaid').textContent=fmtPrice(client.abonos);
-  const sorted=[...client.entries].reverse();
+
+  // Orden real por fecha descendente — más reciente primero
+  const sorted = [...client.entries].sort((a,b) => (b._rawMs||0) - (a._rawMs||0));
+
   document.getElementById('cModalTimeline').innerHTML=sorted.length?sorted.map(e=>`
     <div class="credit-entry">
       <div class="credit-entry-icon ${e.tipo==='Pedido'?'entry-pedido':'entry-abono'}">${e.tipo==='Pedido'?'🛍️':'💰'}</div>
@@ -2078,25 +2109,35 @@ loadProducts();
   /* ===== CREDITOS MODULE ===== */
   .credit-summary-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 14px; margin-bottom: 24px;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 8px; margin-bottom: 24px;
   }
   .credit-client-card {
     background: var(--card); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 18px 20px;
-    cursor: pointer; transition: all .2s;
-    display: flex; flex-direction: column; gap: 5px;
+    border-radius: 12px; padding: 10px 14px;
+    cursor: pointer; transition: all .15s;
+    display: flex; flex-direction: column; gap: 3px;
   }
-  .credit-client-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+  .credit-client-card:hover { border-color: var(--gold); transform: translateY(-1px); }
   .credit-client-card.zero { opacity: 0.5; }
-  .credit-client-name { font-weight: 700; font-size: 0.95rem; }
-  .credit-client-meta { font-size: 0.78rem; color: var(--muted); }
+  .ccc-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .ccc-bottom {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .credit-client-name {
+    font-weight: 700; font-size: 0.85rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .credit-client-meta { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+  .ccc-count { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
   .credit-client-balance {
     font-family: 'Poppins', sans-serif; font-weight: 700;
-    font-size: 1.25rem; margin-top: 4px;
+    font-size: 0.88rem; white-space: nowrap; flex-shrink: 0;
   }
   .credit-client-balance.owed    { color: var(--accent); }
-  .credit-client-balance.clear   { color: var(--success); }
+  .credit-client-balance.clear   { color: var(--success); font-size: 0.75rem; }
   .credit-client-balance.partial { color: var(--gold); }
 
   .credit-modal-overlay {
@@ -2326,6 +2367,13 @@ loadProducts();
             <span style="font-size:0.82rem;color:var(--muted)">Total cartera:</span>
             <span id="creditTotalOwed" style="font-family:Poppins;font-weight:700;font-size:1.1rem;color:var(--accent)">—</span>
           </div>
+        </div>
+        <div class="search-wrap" style="margin-bottom:16px">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="search-input" id="creditSearchInput"
+            placeholder="Buscar cliente..."
+            oninput="creditOnSearch(this.value)">
+          <button class="search-clear" id="creditSearchClear" onclick="creditClearSearch()">✕</button>
         </div>
         <div class="credit-summary-grid" id="creditGrid">
           <div class="credit-empty">Cargando créditos...</div>
