@@ -737,10 +737,11 @@ function getImgHtml(p) {
 function buildCatTabs() {
   const cats=['Todos',...Object.keys(CAT_CONFIG)];
   const counts={};
-  products.forEach(p=>{ const c=p.categoria||'Sin categoría'; counts[c]=(counts[c]||0)+1; });
+  const inStockProducts = products.filter(p => Number(p.stock) > 0);
+  inStockProducts.forEach(p=>{ const c=p.categoria||'Sin categoría'; counts[c]=(counts[c]||0)+1; });
   document.getElementById('catTabs').innerHTML=cats.map(c=>{
     const icon=c==='Todos'?'🛍️':(CAT_CONFIG[c]||'📦');
-    const count=c==='Todos'?products.length:(counts[c]||0);
+    const count=c==='Todos'?inStockProducts.length:(counts[c]||0);
     if(c!=='Todos'&&!counts[c]) return '';
     return `<button class="cat-tab ${activeCategory===c?'active':''}" onclick="selectCategory('${c}')">
       ${icon} ${c} <span class="cat-count">${count}</span></button>`;
@@ -762,9 +763,10 @@ window.clearSearch = function() {
 
 function getFilteredProducts() {
   return products.filter(p=>{
+    const inStock = Number(p.stock) > 0; // ocultar agotados de la vista del cliente
     const matchCat = activeCategory === 'Todos' || (p.categoria || '') === activeCategory;
     const matchSearch = !searchQuery || p.nombre.toLowerCase().includes(searchQuery);
-    return matchCat && matchSearch;
+    return inStock && matchCat && matchSearch;
   });
 }
 
