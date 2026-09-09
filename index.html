@@ -356,7 +356,7 @@ window.submitOrder = async function() {
 
   try {
     // Escribir pedido en Firestore
-    await addDoc(collection(db, COL_PEDIDOS), {
+    const pedidoRef = await addDoc(collection(db, COL_PEDIDOS), {
       timestamp: serverTimestamp(),
       cliente: name, piso, area,
       productos: productosStr,
@@ -364,12 +364,14 @@ window.submitOrder = async function() {
       estado: 'Pedido'
     });
 
-    // Si es fiado, también registrar en créditos
+    // Si es fiado, también registrar en créditos — vinculado al pedido de origen
+    // para poder revertir la deuda si el pedido se rechaza más adelante
     if (selectedPay === 'Fiar') {
       await addDoc(collection(db, COL_CREDITOS), {
         timestamp: serverTimestamp(),
         cliente: name, piso, area,
-        tipo: 'Pedido', monto: total, nota: productosStr, metodo: ''
+        tipo: 'Pedido', monto: total, nota: productosStr, metodo: '',
+        pedidoId: pedidoRef.id
       });
     }
 
@@ -428,7 +430,15 @@ window.rejectOrder = async function(orderId, clienteNombre) {
   if (!confirm(`¿Confirmas que el pedido de ${clienteNombre} NO se entregó?\n\nQuedará marcado como Rechazado y no afectará el inventario.`)) return;
   try {
     await updateDoc(doc(db, COL_PEDIDOS, orderId), { estado: 'Rechazado' });
-    toast('❌ Pedido rechazado', 'success');
+
+    // Si el pedido era fiado, eliminar la deuda vinculada — nunca se entregó
+    const q = query(collection(db, COL_CREDITOS), where('pedidoId', '==', orderId));
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, COL_CREDITOS, d.id));
+    }
+
+    toast(snap.empty ? '❌ Pedido rechazado' : '❌ Pedido rechazado — deuda de fiado revertida', 'success');
   } catch(e) {
     toast('Error al rechazar el pedido', 'error');
   }
