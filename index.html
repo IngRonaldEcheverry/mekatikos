@@ -61,6 +61,10 @@ const GREEN_API_ID_INSTANCE  = '710522731764';
 const GREEN_API_TOKEN        = '405d228b1e7b4629b75444fbe4c70ca4dc4026c7872246a694';
 const WHATSAPP_PHONE         = '573163540560';
 
+// ─── DATOS DE TRANSFERENCIA (Nequi) ─────────────
+const NEQUI_NUMERO = '3163540560'; // Sin el 57 — solo se usa para mostrar en pantalla
+const NEQUI_QR_BASE64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABIgAAASICAIAAAD3TmOUAAAABmJLR0QA/wD/AP+gvaeTAAAb2UlEQVR4nOzagZHcNhAAQa+L+ae8TkBWvS0dRk90J8AlCPJ+BM3u/gUAAEDn73oAAACA2wkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiD31AKfNTD0CfHu7m1z3tvfXOr/bbc+3ut+K9wh+3W3fDSdmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAACxpx4AgB+bmXoEXmh36xEA+AEnZgAAADEnZkf5d0p+F2cpAPwbf2/wu/h74yQnZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAALGnHoDPmpl6hCvsbj3CFap19h6d4T16t+o9sq/O8J08w35+NydmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAACxpx4A4Ktmph7hqN2tR+CDbtvPAPycEzMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgNhTDwDwVbubXHdmrrrubetc3e9trDPAzzkxAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACIPfUAfNbu1iMA/9Nt7291vzOTXPe252ud3806w69zYgYAABATZgAAADFhBgAA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AwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAIDYUw/AZ81MPcIVdrce4Qq3rXP1/t62zryb38F3853kTZyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEnnoAgK+ameS6u3vVdW9z2zrf9h5VqnW+jX31brc9XydmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAAAxYQYAABATZgAAADFhBgAAEBNmAAAAMWEGAAAQE2YAAACxpx4A4E83M/UIR+1uPcIVbttXnFG9v9V+rq5723fytvutODEDAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIgJMwAAgJgwAwAAiAkzAACAmDADAACICTMAAICYMAMAAIg99QB81u7WI8BvU+3nmUmue9v9wifc9v7e5rbvpH31bk7MAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYk89wF1mph4BAAD44zgxAwAAiDkxA76N6sx5d5Pr3sY6n+H/bpxx2zp7f8+wr97NiRkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQEyYAQAAxIQZAABATJgBAADEhBkAAEBMmAEAAMSEGQAAQGx2t54BAADgak7MAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJswAAABiwgwAACAmzAAAAGLCDAAAICbMAAAAYsIMAAAgJszgn/brWAAAAABgkL/1MPaURQAAMBMzAACAmZgBAADMxAwAAGAmZgAAADMxAwAAmIkZAADATMwAAABmYgYAADATMwAAgJmYAQAAzAJK3JUKE6PCBQAAAABJRU5ErkJggg==';
+
 async function sendWhatsAppNotification(cliente, piso, area, productos, total, pago) {
   if (!GREEN_API_ID_INSTANCE || GREEN_API_ID_INSTANCE.startsWith('TU_')) return; // no configurado aún
 
@@ -886,6 +890,16 @@ window.selectPay = function(method) {
   const box=document.getElementById('changeBox');
   if(method==='Efectivo') { box.classList.add('visible'); }
   else { box.classList.remove('visible'); document.getElementById('fPaga').value=''; document.getElementById('changeResult').style.display='none'; }
+
+  // Burbuja de transferencia — solo visible con método Transferencia
+  const transferBubble = document.getElementById('transferBubble');
+  if (method === 'Transferencia') {
+    transferBubble.classList.add('visible');
+    updateTransferBubbleContent();
+  } else {
+    transferBubble.classList.remove('visible');
+  }
+
   const nw=document.getElementById('nameFieldWrap');
   const currentField = document.getElementById('fName');
   const isCurrentlySelect = currentField && currentField.tagName === 'SELECT';
@@ -914,6 +928,37 @@ window.selectPay = function(method) {
     // No se limpia el área/piso/nombre aquí — solo se resetea al enviar el pedido o al elegir Fiar
   }
 };
+// ═══════════════════════════════════════════════
+//  BURBUJA DE TRANSFERENCIA (Nequi) + QR
+// ═══════════════════════════════════════════════
+function updateTransferBubbleContent() {
+  document.getElementById('nequiNumberDisplay').textContent = NEQUI_NUMERO;
+}
+
+window.openWhatsAppProof = function() {
+  const total = Object.values(cart).reduce((s,v) => s + v.price * v.qty, 0);
+  const mensaje = `Hola! Te envío el comprobante de mi transferencia por ${fmtPrice(total)} 🍬`;
+  window.open(`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(mensaje)}`, '_blank');
+};
+
+window.copyNequiNumber = function() {
+  navigator.clipboard.writeText(NEQUI_NUMERO).then(() => {
+    toast('📋 Número copiado al portapapeles', 'success');
+  }).catch(() => {
+    toast('No se pudo copiar automáticamente', 'error');
+  });
+};
+
+window.openQrModal = function() {
+  document.getElementById('qrModalImg').src = NEQUI_QR_BASE64;
+  document.getElementById('qrModalNumber').textContent = NEQUI_NUMERO;
+  document.getElementById('qrModalOverlay').classList.add('open');
+};
+
+window.closeQrModal = function() {
+  document.getElementById('qrModalOverlay').classList.remove('open');
+};
+
 window.autoFillFiado = function(nombre) {
   const f=FIADOS.find(x=>x.nombre===nombre); if(!f) return;
   document.getElementById('fPiso').value=f.piso;
@@ -948,6 +993,7 @@ function resetOrderForm() {
   document.getElementById('payFiar').classList.remove('selected');
   document.getElementById('payFiar').style.cssText='';
   document.getElementById('changeBox').classList.add('visible');
+  document.getElementById('transferBubble').classList.remove('visible');
 }
 
 // ─── ADMIN PEDIDOS ───────────────────────────────
@@ -1760,6 +1806,72 @@ loadProducts();
     animation: fadeIn .2s ease;
   }
   .change-box.visible { display: flex; }
+
+  /* ===== TRANSFER INFO BUBBLE ===== */
+  .transfer-bubble {
+    background: linear-gradient(135deg, rgba(155,89,182,0.1), rgba(52,168,235,0.08));
+    border: 1.5px solid #34a8eb;
+    border-radius: 16px; padding: 16px;
+    display: none; flex-direction: column; gap: 10px;
+    animation: bubbleIn .35s cubic-bezier(.34,1.56,.64,1);
+  }
+  .transfer-bubble.visible { display: flex; }
+  @keyframes bubbleIn {
+    0%   { opacity: 0; transform: translateY(14px) scale(.92); }
+    60%  { opacity: 1; transform: translateY(-3px) scale(1.02); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .transfer-header {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 700; font-size: 0.9rem; color: #34a8eb;
+  }
+  .transfer-header .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #34a8eb; animation: pulse 1.6s infinite;
+  }
+  .transfer-account {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--card); border-radius: 10px; padding: 10px 14px;
+  }
+  .transfer-account-label { font-size: 0.75rem; color: var(--muted); }
+  .transfer-account-number { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 1.05rem; letter-spacing: 0.5px; }
+  .transfer-copy-btn {
+    background: rgba(52,168,235,0.15); color: #34a8eb; border: none;
+    padding: 6px 12px; border-radius: 8px; font-size: 0.75rem; font-weight: 600;
+    cursor: pointer; transition: background .15s; white-space: nowrap;
+  }
+  .transfer-copy-btn:hover { background: rgba(52,168,235,0.28); }
+  .transfer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .transfer-action-btn {
+    flex: 1; min-width: 130px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px; border-radius: 10px; border: 1.5px solid var(--border);
+    background: var(--card); color: var(--text);
+    font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    text-decoration: none; transition: all .15s;
+  }
+  .transfer-action-btn:hover { border-color: #34a8eb; color: #34a8eb; }
+  .transfer-action-btn.whatsapp:hover { border-color: #25D366; color: #25D366; }
+
+  /* QR modal */
+  .qr-modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+    z-index: 400; display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  .qr-modal-overlay.open { display: flex; animation: fadeIn .2s ease; }
+  .qr-modal-box {
+    background: #fff; border-radius: 20px; padding: 24px;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    max-width: 320px; width: 100%;
+    animation: bubbleIn .3s cubic-bezier(.34,1.56,.64,1);
+  }
+  .qr-modal-box img { width: 100%; max-width: 240px; border-radius: 8px; }
+  .qr-modal-box .qr-caption { color: #333; font-weight: 700; font-size: 0.95rem; text-align: center; }
+  .qr-modal-close {
+    background: var(--accent); color: #fff; border: none;
+    padding: 10px 24px; border-radius: 50px; font-weight: 600;
+    cursor: pointer; font-size: 0.85rem; width: 100%;
+  }
   @keyframes fadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
   .change-result {
     display: flex; justify-content: space-between; align-items: center;
@@ -2268,6 +2380,33 @@ loadProducts();
           <span class="amount" id="changeAmount">—</span>
         </div>
       </div>
+
+      <!-- Burbuja de datos de transferencia — solo visible con Transferencia -->
+      <div class="transfer-bubble" id="transferBubble">
+        <div class="transfer-header">
+          <span class="pulse-dot"></span>
+          Datos para tu transferencia
+        </div>
+        <div class="transfer-account">
+          <div>
+            <div class="transfer-account-label">Nequi</div>
+            <div class="transfer-account-number" id="nequiNumberDisplay">—</div>
+          </div>
+          <button class="transfer-copy-btn" onclick="copyNequiNumber()">📋 Copiar</button>
+        </div>
+        <div class="transfer-actions">
+          <button class="transfer-action-btn" onclick="openQrModal()">
+            📷 Ver código QR
+          </button>
+          <button class="transfer-action-btn whatsapp" onclick="openWhatsAppProof()">
+            💬 Enviar comprobante
+          </button>
+        </div>
+        <div style="font-size:0.72rem;color:var(--muted);text-align:center">
+          Esto es solo informativo — no es obligatorio enviar el comprobante ahora
+        </div>
+      </div>
+
       <button class="btn btn-primary" style="width:100%;padding:14px;font-size:1rem;border-radius:14px" onclick="submitOrder()">
         🚀 Confirmar pedido
       </button>
@@ -2411,6 +2550,16 @@ loadProducts();
         <button class="btn btn-gold" onclick="submitNewProduct()" style="width:100%;padding:11px">➕ Crear producto</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ===== QR MODAL (Nequi) ===== -->
+<div class="qr-modal-overlay" id="qrModalOverlay" onclick="if(event.target===this)closeQrModal()">
+  <div class="qr-modal-box">
+    <div class="qr-caption">📷 Escanea para transferir</div>
+    <img src="" id="qrModalImg" alt="Código QR Nequi">
+    <div class="qr-caption" id="qrModalNumber" style="font-size:1.1rem;color:#34a8eb">—</div>
+    <button class="qr-modal-close" onclick="closeQrModal()">Cerrar</button>
   </div>
 </div>
 
