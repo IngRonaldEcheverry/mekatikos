@@ -50,17 +50,20 @@ const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
 const COL_INGRESOS  = 'ingresos';
 
-// ─── NOTIFICACIÓN WHATSAPP (CallMeBot) ──────────
-// Servicio gratuito no oficial. Configura estos 2 valores
-// siguiendo las instrucciones que te compartió Claude.
+// ─── NOTIFICACIÓN WHATSAPP (Green API) ──────────
+// Servicio con plan gratuito para enviarte notificaciones a tu
+// propio número. Configura estos 3 valores desde tu panel de
+// Green API (green-api.com) siguiendo las instrucciones de Claude.
 // ⚠️ Estas credenciales quedan visibles en el código fuente —
-// riesgo aceptado: alguien podría enviar mensajes falsos usando
-// esta clave, pero no compromete datos de la tienda.
-const WHATSAPP_PHONE  = 'TU_NUMERO_SIN_MAS_NI_ESPACIOS'; // ej: 573001234567
-const WHATSAPP_APIKEY = 'TU_APIKEY_DE_CALLMEBOT';
+// riesgo aceptado: alguien podría usarlas para enviar mensajes
+// desde tu instancia, pero no compromete datos de la tienda.
+const GREEN_API_ID_INSTANCE  = '710522731764';
+const GREEN_API_TOKEN        = '405d228b1e7b4629b75444fbe4c70ca4dc4026c7872246a694';
+const WHATSAPP_PHONE         = '573163540560';
 
 async function sendWhatsAppNotification(cliente, piso, area, productos, total, pago) {
-  if (!WHATSAPP_PHONE || WHATSAPP_PHONE.startsWith('TU_')) return; // no configurado aún
+  if (!GREEN_API_ID_INSTANCE || GREEN_API_ID_INSTANCE.startsWith('TU_')) return; // no configurado aún
+
   const mensaje =
     `🍬 *Nuevo pedido - Mekatikos*\n\n` +
     `👤 ${cliente}\n` +
@@ -68,11 +71,21 @@ async function sendWhatsAppNotification(cliente, piso, area, productos, total, p
     `🛍️ ${productos}\n` +
     `💰 ${fmtPrice(total)}\n` +
     `💳 ${pago}`;
-  const url = `https://api.callmebot.com/whatsapp.php?phone=${WHATSAPP_PHONE}&text=${encodeURIComponent(mensaje)}&apikey=${WHATSAPP_APIKEY}`;
+
+  const url = `https://api.green-api.com/waInstance${GREEN_API_ID_INSTANCE}/sendMessage/${GREEN_API_TOKEN}`;
+
   try {
-    await fetch(url, { mode: 'no-cors' }); // fire-and-forget, no se puede leer la respuesta
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: `${WHATSAPP_PHONE}@c.us`,
+        message: mensaje
+      })
+    });
   } catch(e) { /* si falla, no interrumpe el flujo del pedido */ }
 }
+
 
 // ─── 3. ESTADO GLOBAL ───────────────────────────
 let cart         = {};
