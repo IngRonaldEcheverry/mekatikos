@@ -19,7 +19,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import {
   getFirestore, collection, doc,
-  getDocs, addDoc, updateDoc, onSnapshot,
+  getDocs, addDoc, updateDoc, deleteDoc, onSnapshot,
   query, orderBy, serverTimestamp, where
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import {
@@ -710,6 +710,87 @@ window.submitNewProduct = async function() {
 };
 
 // ═══════════════════════════════════════════════
+//  EDITAR PRODUCTO
+// ═══════════════════════════════════════════════
+let activeEditProduct = null;
+
+window.openEditProductModal = function(productId) {
+  const p = products.find(x => x.id === productId);
+  if (!p) return;
+  activeEditProduct = p;
+
+  document.getElementById('epModalMeta').textContent = `ID interno: ${p.id.slice(0,8)}...`;
+  document.getElementById('epNombre').value    = p.nombre || '';
+  document.getElementById('epPrecio').value    = p.precio ?? '';
+  document.getElementById('epCosto').value     = p.costo ?? '';
+  document.getElementById('epStock').value     = p.stock ?? 0;
+  document.getElementById('epCategoria').value = p.categoria || 'Dulces';
+  document.getElementById('epImagen').value    = p.imagen || p.emoji || '';
+  document.getElementById('editProductModalOverlay').classList.add('open');
+};
+
+window.closeEditProductModal = function() {
+  document.getElementById('editProductModalOverlay').classList.remove('open');
+  activeEditProduct = null;
+};
+
+window.submitEditProduct = async function() {
+  if (!activeEditProduct) return;
+  const nombre    = document.getElementById('epNombre').value.trim();
+  const precio    = parseFloat(document.getElementById('epPrecio').value);
+  const costo     = parseFloat(document.getElementById('epCosto').value);
+  const stock     = parseInt(document.getElementById('epStock').value);
+  const categoria = document.getElementById('epCategoria').value;
+  const imagen    = document.getElementById('epImagen').value.trim();
+
+  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+  if (isNaN(precio) || precio < 0) { toast('Ingresa un precio de venta válido', 'error'); return; }
+  if (isNaN(costo) || costo < 0) { toast('Ingresa un costo válido', 'error'); return; }
+  if (isNaN(stock) || stock < 0) { toast('Ingresa un stock válido', 'error'); return; }
+
+  // Evitar duplicados (excluyendo el producto actual)
+  const dup = products.find(p => p.id !== activeEditProduct.id && p.nombre.toLowerCase() === nombre.toLowerCase());
+  if (dup) { toast('Ya existe otro producto con ese nombre', 'error'); return; }
+
+  const btn = document.querySelector('#editProductModalOverlay .btn-gold');
+  btn.textContent = '⏳ Guardando...'; btn.disabled = true;
+
+  try {
+    const docData = { nombre, precio, costo, stock, categoria, imagen: imagen || '' };
+    await updateDoc(doc(db, COL_PRODUCTOS, activeEditProduct.id), docData);
+
+    // Actualizar en memoria
+    Object.assign(activeEditProduct, docData);
+
+    toast(`✅ ${nombre} actualizado correctamente`, 'success');
+    closeEditProductModal();
+    buildCatTabs(); renderProducts();
+    window.renderInventory();
+  } catch(e) {
+    toast('Error al guardar los cambios', 'error');
+  } finally {
+    btn.textContent = '💾 Guardar cambios'; btn.disabled = false;
+  }
+};
+
+window.confirmDeleteProduct = async function() {
+  if (!activeEditProduct) return;
+  const nombre = activeEditProduct.nombre;
+  if (!confirm(`¿Eliminar "${nombre}" definitivamente?\n\nEsta acción no se puede deshacer.`)) return;
+
+  try {
+    await deleteDoc(doc(db, COL_PRODUCTOS, activeEditProduct.id));
+    products = products.filter(p => p.id !== activeEditProduct.id);
+    toast(`🗑️ ${nombre} eliminado`, 'success');
+    closeEditProductModal();
+    buildCatTabs(); renderProducts();
+    window.renderInventory();
+  } catch(e) {
+    toast('Error al eliminar el producto', 'error');
+  }
+};
+
+// ═══════════════════════════════════════════════
 //  RENDER HELPERS (idénticos al original)
 // ═══════════════════════════════════════════════
 function showProductSkeleton() {
@@ -1112,14 +1193,63 @@ function checkNewOrders() {
 
 
 // ─── INVENTARIO ──────────────────────────────────
+// ─── BÚSQUEDA EN INVENTARIO ──────────────────────
+let invSearchQuery = '';
+window.invOnSearch = function(val) {
+  invSearchQuery = val.trim().toLowerCase();
+  document.getElementById('invSearchClear').classList.toggle('visible', val.length > 0);
+  window.renderInventory();
+};
+window.invClearSearch = function() {
+  invSearchQuery = '';
+  document.getElementById('invSearchInput').value = '';
+  document.getElementById('invSearchClear').classList.remove('visible');
+  window.renderInventory();
+};
+
+function invStockGroup(stock) {
+  if (stock === 0) return { key: 'agotado', label: '❌ Agotados',      order: 0 };
+  if (stock <= 5)  return { key: 'bajo',    label: '⚠️ Stock bajo',    order: 1 };
+  return               { key: 'ok',      label: '✅ Stock disponible', order: 2 };
+}
+
 window.renderInventory = function() {
   const tbody=document.getElementById('invBody');
   if(!products.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Sin datos</td></tr>';return;}
+
+  const filtered = invSearchQuery
+    ? products.filter(p => p.nombre.toLowerCase().includes(invSearchQuery))
+    : products;
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">
+      🔍 No encontramos "<strong>${invSearchQuery}</strong>"</td></tr>`;
+    return;
+  }
+
+  // Ordenar: agotados primero, luego bajos, luego ok — alfabético dentro de cada grupo
+  const sorted = [...filtered].sort((a,b) => {
+    const ga = invStockGroup(Number(a.stock)||0).order;
+    const gb = invStockGroup(Number(b.stock)||0).order;
+    if (ga !== gb) return ga - gb;
+    return a.nombre.localeCompare(b.nombre);
+  });
+
   const maxStock=Math.max(...products.map(p=>Number(p.stock)||0),1);
-  tbody.innerHTML=products.map(p=>{
-    const stock=Number(p.stock); const pct=Math.round((stock/maxStock)*100);
-    const cls=stock===0?'critical':stock<=5?'low':'';
-    return `<tr>
+  let lastGroupKey = null;
+  const rows = [];
+
+  sorted.forEach(p => {
+    const stock=Number(p.stock)||0;
+    const group = invStockGroup(stock);
+    if (group.key !== lastGroupKey) {
+      rows.push(`<tr class="inv-group-row"><td colspan="6">${group.label}</td></tr>`);
+      lastGroupKey = group.key;
+    }
+    const pct = Math.round((stock/maxStock)*100);
+    const cls = stock===0?'critical':stock<=5?'low':'';
+    const safeName = p.nombre.replace(/'/g,"\\'");
+    rows.push(`<tr>
       <td>${p.emoji||'🍬'} <strong>${p.nombre}</strong></td>
       <td style="color:var(--gold)">${fmtPrice(p.precio)}</td>
       <td style="color:var(--muted)">${fmtPrice(p.costo)}</td>
@@ -1128,9 +1258,14 @@ window.renderInventory = function() {
         <span style="font-weight:600">${stock}</span></div></td>
       <td><span class="badge ${stock===0?'badge-pending':stock<=5?'badge-pending':'badge-delivered'}">
         ${stock===0?'❌ Agotado':stock<=5?'⚠️ Bajo':'✅ OK'}</span></td>
-      <td><button class="btn btn-gold btn-sm" onclick="openIngresoModal('${p.id}')">📥 Ingresar</button></td>
-    </tr>`;
-  }).join('');
+      <td><div style="display:flex;gap:6px">
+        <button class="btn btn-outline btn-sm" onclick="openEditProductModal('${p.id}')">✏️ Editar</button>
+        <button class="btn btn-gold btn-sm" onclick="openIngresoModal('${p.id}')">📥 Ingresar</button>
+      </div></td>
+    </tr>`);
+  });
+
+  tbody.innerHTML = rows.join('');
 };
 
 // ─── CRÉDITOS ───────────────────────────────────
@@ -1776,6 +1911,12 @@ loadProducts();
   .inv-table th, .inv-table td { padding: 12px 16px; border-bottom: 1px solid var(--border); text-align: left; }
   .inv-table th { background: var(--card); color: var(--muted); font-weight: 600; }
   .inv-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .inv-group-row td {
+    background: var(--panel) !important;
+    font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 0.78rem;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
   .stock-bar-wrap { width: 100%; background: var(--border); border-radius: 4px; height: 6px; }
   .stock-bar { height: 6px; border-radius: 4px; background: var(--success); transition: width .4s; }
   .stock-bar.low { background: #ff9f43; }
@@ -2222,6 +2363,13 @@ loadProducts();
             <button class="btn btn-outline btn-sm" onclick="switchTab('historial-ingresos')">📜 Ver historial de ingresos</button>
           </div>
         </div>
+        <div class="search-wrap" style="margin-bottom:16px">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="search-input" id="invSearchInput"
+            placeholder="Buscar producto en inventario..."
+            oninput="invOnSearch(this.value)">
+          <button class="search-clear" id="invSearchClear" onclick="invClearSearch()">✕</button>
+        </div>
         <div class="table-wrap">
           <table class="inv-table">
             <thead>
@@ -2504,6 +2652,57 @@ loadProducts();
           <input type="text" id="npImagen" placeholder="https://drive.google.com/... o 🍬">
         </div>
         <button class="btn btn-gold" onclick="submitNewProduct()" style="width:100%;padding:11px">➕ Crear producto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL EDITAR PRODUCTO ===== -->
+<div class="credit-modal-overlay" id="editProductModalOverlay" onclick="if(event.target===this)closeEditProductModal()">
+  <div class="credit-modal">
+    <div class="credit-modal-header">
+      <div>
+        <h3>✏️ Editar producto</h3>
+        <div class="cmeta" id="epModalMeta">—</div>
+      </div>
+      <button class="close-btn" onclick="closeEditProductModal()">✕</button>
+    </div>
+    <div class="credit-modal-body">
+      <div class="abono-form">
+        <div class="form-group" style="margin:0">
+          <label>Nombre del producto <span style="color:var(--accent)">*</span></label>
+          <input type="text" id="epNombre" placeholder="Ej: Chocolatina Jet">
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Precio de venta <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="epPrecio" placeholder="$" min="0" inputmode="numeric">
+          </div>
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Costo <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="epCosto" placeholder="$" min="0" inputmode="numeric">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Stock <span style="color:var(--accent)">*</span></label>
+            <input type="number" id="epStock" placeholder="0" min="0" inputmode="numeric">
+          </div>
+          <div class="form-group" style="margin:0;flex:1">
+            <label>Categoría <span style="color:var(--accent)">*</span></label>
+            <select id="epCategoria" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.88rem;outline:none;width:100%">
+              <option value="Dulces">🍬 Dulces</option>
+              <option value="Galletas">🍪 Galletas</option>
+              <option value="Mecato">🥔 Mecato</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Imagen o emoji <span style="color:var(--muted);font-weight:400">(link de Drive, URL o emoji como 🍬)</span></label>
+          <input type="text" id="epImagen" placeholder="https://drive.google.com/... o 🍬">
+        </div>
+        <button class="btn btn-gold" onclick="submitEditProduct()" style="width:100%;padding:11px">💾 Guardar cambios</button>
+        <button class="btn btn-outline btn-sm" style="width:100%;border-color:var(--accent);color:var(--accent)" onclick="confirmDeleteProduct()">🗑️ Eliminar producto</button>
       </div>
     </div>
   </div>
