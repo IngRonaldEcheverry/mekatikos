@@ -1487,7 +1487,6 @@ window.switchTab = function(name,btn) {
   if(name==='venta-rapida') window.renderQuickSaleGrid();
 };
 
-window.refreshAll = function() { /* tiempo real — onSnapshot ya actualiza automáticamente */ };
 
 // ─── UTILS ──────────────────────────────────────
 function fmtPrice(n) { return '$'+Number(n).toLocaleString('es-CO'); }
@@ -2289,7 +2288,6 @@ loadProducts();
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:gap">
         <h2 style="font-family:Poppins;font-weight:700;font-size:1.4rem">Panel Mekatikos 🍬</h2>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-outline btn-sm" onclick="refreshAll()">🔄 Actualizar</button>
           <button class="btn btn-outline btn-sm" onclick="showStore()">🛍️ Ver tienda</button>
           <button class="btn btn-outline btn-sm" onclick="logoutAdmin()">Salir</button>
         </div>
