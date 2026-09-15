@@ -1408,6 +1408,29 @@ window.closeCreditModal = function() {
   activeCreditClient=null;
 };
 
+window.renameClientCredit = async function() {
+  if (!activeCreditClient) return;
+  const oldName = activeCreditClient.cliente;
+  const newName = prompt(`Renombrar/fusionar "${oldName}" a:\n\n(Si escribes un nombre que ya existe en Créditos, se une todo el historial bajo ese nombre)`, oldName);
+  if (newName === null) return; // canceló
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed === oldName) return;
+
+  try {
+    const q = query(collection(db, COL_CREDITOS), where('cliente', '==', oldName));
+    const snap = await getDocs(q);
+    if (snap.empty) { toast('No se encontraron registros para renombrar', 'error'); return; }
+
+    for (const d of snap.docs) {
+      await updateDoc(doc(db, COL_CREDITOS, d.id), { cliente: trimmed });
+    }
+    toast(`✅ ${snap.size} registro(s) movidos de "${oldName}" a "${trimmed}"`, 'success');
+    closeCreditModal();
+  } catch(e) {
+    toast('Error al renombrar/fusionar', 'error');
+  }
+};
+
 window.confirmDeleteClientCredit = async function() {
   if (!activeCreditClient) return;
   const balance = activeCreditClient.pedidos - activeCreditClient.abonos;
@@ -2922,6 +2945,7 @@ loadFiados();
         <div class="credit-empty">Sin movimientos</div>
       </div>
 
+      <button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px" onclick="renameClientCredit()">✏️ Renombrar / Fusionar cliente</button>
       <button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;border-color:var(--accent);color:var(--accent)" onclick="confirmDeleteClientCredit()">🗑️ Eliminar de Créditos</button>
     </div>
   </div>
