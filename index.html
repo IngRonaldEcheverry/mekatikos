@@ -1598,7 +1598,7 @@ window.renderQuickSaleGrid = function() {
     return;
   }
 
-  grid.innerHTML=filtered.map(p=>{
+  const cardHtml = (p) => {
     const oos=Number(p.stock)<=0, qty=qsCart[p.nombre]||0;
     const raw=(p.imagen||p.emoji||'').toString().trim();
     let imgHtml=`<span style="font-size:1.8rem">🍬</span>`;
@@ -1610,7 +1610,21 @@ window.renderQuickSaleGrid = function() {
       <div class="qs-price">${fmtPrice(p.precio)}</div>
       ${qty>0?`<div class="qs-qty-row"><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',-1)">−</button><span style="font-weight:700;font-size:.85rem">${qty}</span><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',1)">+</button></div>`:oos?`<span style="font-size:.72rem;color:var(--accent)">Agotado</span>`:`<span style="font-size:.72rem;color:var(--muted)">Toca para agregar</span>`}
     </div>`;
-  }).join('');
+  };
+
+  // Separar seleccionados del resto — los seleccionados van primero y bien visibles
+  const selected = filtered.filter(p => (qsCart[p.nombre]||0) > 0);
+  const rest = filtered.filter(p => (qsCart[p.nombre]||0) === 0);
+
+  let html = '';
+  if (selected.length) {
+    html += `<div class="cat-group-label" style="grid-column:1/-1"><span>✅ Ya seleccionados (${selected.length})</span></div>`;
+    html += selected.map(cardHtml).join('');
+    html += `<div class="cat-group-label" style="grid-column:1/-1"><span>🛍️ Resto de productos</span></div>`;
+  }
+  html += rest.map(cardHtml).join('');
+
+  grid.innerHTML = html;
   updateQsSummary();
 };
 window.qsAdd = function(name) {
@@ -2283,11 +2297,26 @@ loadFiados();
     background: var(--bg); border: 1.5px solid var(--border);
     border-radius: 12px; padding: 12px 10px;
     text-align: center; cursor: pointer;
-    transition: border-color .15s, transform .15s;
+    transition: border-color .15s, transform .15s, box-shadow .15s;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
+    position: relative;
   }
   .qs-card:hover { border-color: var(--gold); transform: translateY(-2px); }
-  .qs-card.qs-added { border-color: var(--accent); background: rgba(233,69,96,0.06); }
+  .qs-card.qs-added {
+    border: 2px solid var(--accent);
+    background: rgba(233,69,96,0.12);
+    box-shadow: 0 0 0 3px rgba(233,69,96,0.15);
+  }
+  .qs-card.qs-added::before {
+    content: '✓';
+    position: absolute; top: -8px; right: -8px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; font-weight: 900;
+    border: 2px solid var(--panel);
+    z-index: 1;
+  }
   .qs-card.qs-oos { opacity: 0.35; pointer-events: none; }
   .qs-img-wrap {
     width: 52px; height: 52px; border-radius: 8px; overflow: hidden;
