@@ -927,8 +927,21 @@ window.changeQty = function(name,delta) {
   if(!Object.keys(cart).length) renderCartEmpty(); else renderCartItems();
 };
 function updateCartBadge() {
-  document.getElementById('cartCount').textContent=Object.values(cart).reduce((s,i)=>s+i.qty,0);
+  const count = Object.values(cart).reduce((s,i)=>s+i.qty,0);
+  document.getElementById('cartCount').textContent=count;
+  document.getElementById('clearCartBtn').style.display = count > 0 ? 'block' : 'none';
 }
+
+window.confirmClearCart = function() {
+  if (!Object.keys(cart).length) return;
+  if (!confirm('¿Vaciar el carrito? Se perderán los productos seleccionados.')) return;
+  cart = {};
+  updateCartBadge();
+  renderProducts();
+  renderCartEmpty();
+  toast('🗑️ Carrito vaciado', 'success');
+};
+
 window.openCart = function() {
   document.getElementById('cartOverlay').classList.add('open');
   document.getElementById('cartDrawer').classList.add('open');
@@ -1634,12 +1647,23 @@ window.qsCalcChange = function() {
 function updateQsSummary() {
   const entries=Object.entries(qsCart);
   const btn=document.getElementById('qsConfirmBtn');
+  const clearBtn=document.getElementById('clearQsBtn');
+  if (clearBtn) clearBtn.style.display = entries.length ? 'block' : 'none';
   if(!entries.length){document.getElementById('qsSummaryItems').textContent='Ningún producto seleccionado';document.getElementById('qsTotal').textContent='$0';if(btn)btn.disabled=true;return;}
   if(btn)btn.disabled=false;
   document.getElementById('qsSummaryItems').textContent=entries.map(([n,q])=>`${n} x${q}`).join(', ');
   const total=entries.reduce((s,[n,q])=>{const p=products.find(x=>x.nombre===n);return s+(p?Number(p.precio)*q:0);},0);
   document.getElementById('qsTotal').textContent=fmtPrice(total);
 }
+
+window.confirmClearQuickSale = function() {
+  if (!Object.keys(qsCart).length) return;
+  if (!confirm('¿Vaciar la selección de venta rápida?')) return;
+  qsCart = {};
+  window.renderQuickSaleGrid();
+  toast('🗑️ Selección vaciada', 'success');
+};
+
 
 // ─── TABS ────────────────────────────────────────
 window.switchTab = function(name,btn) {
@@ -1671,6 +1695,34 @@ function toast(msg,type='success') {
   const el=document.createElement('div'); el.className=`toast ${type}`; el.textContent=msg;
   c.appendChild(el); setTimeout(()=>el.remove(),3500);
 }
+
+// ═══════════════════════════════════════════════
+//  AUTO-VACIADO POR INACTIVIDAD (útil en PC compartido)
+//  Si nadie interactúa con la página durante 15 minutos,
+//  el carrito de la tienda se limpia solo — evita que el
+//  siguiente cliente vea productos de alguien más.
+// ═══════════════════════════════════════════════
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutos
+let idleTimer = null;
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    // Solo vaciar si hay algo en el carrito y no está en medio del pago
+    if (Object.keys(cart).length) {
+      cart = {};
+      updateCartBadge();
+      renderProducts();
+      renderCartEmpty();
+      closeCart();
+    }
+  }, IDLE_TIMEOUT_MS);
+}
+
+['click', 'keydown', 'touchstart', 'input'].forEach(evt => {
+  document.addEventListener(evt, resetIdleTimer, { passive: true });
+});
+resetIdleTimer();
 
 // ─── INICIO ─────────────────────────────────────
 loadProducts();
@@ -2501,7 +2553,13 @@ loadFiados();
       <!-- TAB: Venta Rápida -->
       <div class="tab-content" id="tab-venta-rapida">
         <div class="quick-sale-panel">
-          <h3>⚡ Venta Rápida <span style="font-size:0.78rem;color:var(--muted);font-family:Inter,sans-serif;font-weight:400">— Sin datos del cliente, descuenta inventario al confirmar</span></h3>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+            <h3>⚡ Venta Rápida <span style="font-size:0.78rem;color:var(--muted);font-family:Inter,sans-serif;font-weight:400">— Sin datos del cliente, descuenta inventario al confirmar</span></h3>
+            <button id="clearQsBtn" onclick="confirmClearQuickSale()"
+              style="display:none;background:none;border:none;color:var(--muted);font-size:0.78rem;cursor:pointer;text-decoration:underline;padding:0;white-space:nowrap;flex-shrink:0">
+              Vaciar
+            </button>
+          </div>
           <div class="search-wrap" style="margin-bottom:14px">
             <span class="search-icon">🔍</span>
             <input type="text" class="search-input" id="qsSearchInput"
@@ -2699,7 +2757,13 @@ loadFiados();
 <div class="cart-drawer" id="cartDrawer">
   <div class="cart-header">
     <h2>🛒 Tu pedido</h2>
-    <button class="close-btn" onclick="closeCart()">✕</button>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button id="clearCartBtn" onclick="confirmClearCart()"
+        style="display:none;background:none;border:none;color:var(--muted);font-size:0.78rem;cursor:pointer;text-decoration:underline;padding:0">
+        Vaciar
+      </button>
+      <button class="close-btn" onclick="closeCart()">✕</button>
+    </div>
   </div>
   <div class="cart-items" id="cartItems">
     <div class="cart-empty">Tu carrito está vacío 🍃</div>
