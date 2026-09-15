@@ -1395,6 +1395,32 @@ window.closeCreditModal = function() {
   activeCreditClient=null;
 };
 
+window.confirmDeleteClientCredit = async function() {
+  if (!activeCreditClient) return;
+  const balance = activeCreditClient.pedidos - activeCreditClient.abonos;
+  const nombre = activeCreditClient.cliente;
+
+  // Seguridad: no permitir borrar si todavía debe dinero real
+  if (balance > 1) {
+    toast(`⚠️ ${nombre} aún debe ${fmtPrice(balance)} — registra el pago completo antes de eliminar`, 'error');
+    return;
+  }
+
+  if (!confirm(`¿Eliminar todo el historial de créditos de "${nombre}"?\n\nEsto borra sus pedidos fiados y abonos registrados. No afecta si vuelve a fiar en el futuro — solo limpia el historial actual.`)) return;
+
+  try {
+    const q = query(collection(db, COL_CREDITOS), where('cliente', '==', nombre));
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, COL_CREDITOS, d.id));
+    }
+    toast(`🗑️ Historial de ${nombre} eliminado de Créditos`, 'success');
+    closeCreditModal();
+  } catch(e) {
+    toast('Error al eliminar el historial', 'error');
+  }
+};
+
 // ═══════════════════════════════════════════════
 //  FIADOS — CRUD desde el panel admin
 // ═══════════════════════════════════════════════
@@ -2802,6 +2828,8 @@ loadFiados();
       <div class="credit-timeline" id="cModalTimeline">
         <div class="credit-empty">Sin movimientos</div>
       </div>
+
+      <button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;border-color:var(--accent);color:var(--accent)" onclick="confirmDeleteClientCredit()">🗑️ Eliminar de Créditos</button>
     </div>
   </div>
 </div>
