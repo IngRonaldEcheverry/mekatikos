@@ -1473,13 +1473,15 @@ window.confirmDeleteClientCredit = async function() {
 // ═══════════════════════════════════════════════
 //  TICKET DE CRÉDITO — imagen para enviar al cliente
 // ═══════════════════════════════════════════════
-function drawCreditTicket(canvas, client) {
+function drawCreditTicket(canvas, client, includeHistory = true) {
   const ctx = canvas.getContext('2d');
   const W = 380;
   const balance = client.pedidos - client.abonos;
   const alDia = balance <= 0;
 
-  const sorted = [...client.entries].sort((a,b) => (a._rawMs||0) - (b._rawMs||0));
+  const sorted = includeHistory
+    ? [...client.entries].sort((a,b) => (a._rawMs||0) - (b._rawMs||0))
+    : [];
   const lineHeight = 24;
   const headerH = 150;
   const footerH = 90;
@@ -1515,30 +1517,34 @@ function drawCreditTicket(canvas, client) {
   ctx.beginPath(); ctx.moveTo(20, 136); ctx.lineTo(W-20, 136); ctx.stroke();
 
   let y = 136 + 26;
-  ctx.font = '11px sans-serif';
-  sorted.forEach(e => {
-    const isPedido = e.tipo === 'Pedido';
-    const desc = isPedido ? (e.nota || 'Pedido') : `Abono${e.metodo ? ' · '+e.metodo : ''}`;
-    const shortDesc = desc.length > 32 ? desc.slice(0,30)+'…' : desc;
-    const dateStr = (e.timestamp || '').split(',')[0];
 
-    ctx.fillStyle = '#8888aa';
-    ctx.fillText(dateStr, 20, y);
-    ctx.fillStyle = '#eaeaea';
-    ctx.fillText(shortDesc, 78, y);
-
-    ctx.textAlign = 'right';
-    ctx.fillStyle = isPedido ? '#e94560' : '#2ecc71';
-    ctx.font = '700 11px sans-serif';
-    ctx.fillText(`${isPedido?'-':'+'}${fmtPrice(e.monto)}`, W-20, y);
+  if (includeHistory) {
     ctx.font = '11px sans-serif';
-    ctx.textAlign = 'left';
+    sorted.forEach(e => {
+      const isPedido = e.tipo === 'Pedido';
+      const desc = isPedido ? (e.nota || 'Pedido') : `Abono${e.metodo ? ' · '+e.metodo : ''}`;
+      const shortDesc = desc.length > 32 ? desc.slice(0,30)+'…' : desc;
+      const dateStr = (e.timestamp || '').split(',')[0];
 
-    y += lineHeight;
-  });
+      ctx.fillStyle = '#8888aa';
+      ctx.fillText(dateStr, 20, y);
+      ctx.fillStyle = '#eaeaea';
+      ctx.fillText(shortDesc, 78, y);
 
-  ctx.beginPath(); ctx.moveTo(20, y+4); ctx.lineTo(W-20, y+4); ctx.stroke();
-  y += 30;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = isPedido ? '#e94560' : '#2ecc71';
+      ctx.font = '700 11px sans-serif';
+      ctx.fillText(`${isPedido?'-':'+'}${fmtPrice(e.monto)}`, W-20, y);
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'left';
+
+      y += lineHeight;
+    });
+    ctx.beginPath(); ctx.moveTo(20, y+4); ctx.lineTo(W-20, y+4); ctx.stroke();
+    y += 30;
+  } else {
+    y += 10;
+  }
 
   ctx.font = '12px sans-serif'; ctx.fillStyle = '#8888aa';
   ctx.fillText('Total pedidos fiados', 20, y);
@@ -1573,11 +1579,19 @@ function drawCreditTicket(canvas, client) {
 window.openTicketModal = function() {
   if (!activeCreditClient) return;
   const canvas = document.getElementById('ticketCanvas');
-  drawCreditTicket(canvas, activeCreditClient);
+  document.getElementById('ticketShowHistory').checked = true;
+  drawCreditTicket(canvas, activeCreditClient, true);
   document.getElementById('ticketModalOverlay').classList.add('open');
 
   const shareBtn = document.getElementById('ticketShareBtn');
   shareBtn.style.display = (navigator.share && navigator.canShare) ? 'block' : 'none';
+};
+
+window.refreshTicketPreview = function() {
+  if (!activeCreditClient) return;
+  const includeHistory = document.getElementById('ticketShowHistory').checked;
+  const canvas = document.getElementById('ticketCanvas');
+  drawCreditTicket(canvas, activeCreditClient, includeHistory);
 };
 
 window.closeTicketModal = function() {
@@ -3386,6 +3400,10 @@ loadFiados();
 <div class="qr-modal-overlay" id="ticketModalOverlay" onclick="if(event.target===this)closeTicketModal()">
   <div class="qr-modal-box" style="max-width:380px">
     <canvas id="ticketCanvas" style="width:100%;border-radius:12px"></canvas>
+    <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#333;width:100%;cursor:pointer">
+      <input type="checkbox" id="ticketShowHistory" checked onchange="refreshTicketPreview()" style="width:16px;height:16px;cursor:pointer">
+      Incluir histórico de movimientos
+    </label>
     <button class="qr-modal-whatsapp" id="ticketShareBtn" onclick="shareTicket()" style="background:#25D366">📤 Compartir por WhatsApp</button>
     <button class="qr-modal-whatsapp" onclick="downloadTicket()" style="background:var(--gold);color:#111">💾 Descargar imagen</button>
     <button class="qr-modal-close" onclick="closeTicketModal()">Cerrar</button>
