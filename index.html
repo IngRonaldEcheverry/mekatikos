@@ -1471,6 +1471,154 @@ window.confirmDeleteClientCredit = async function() {
 };
 
 // ═══════════════════════════════════════════════
+//  TICKET DE CRÉDITO — imagen para enviar al cliente
+// ═══════════════════════════════════════════════
+function drawCreditTicket(canvas, client) {
+  const ctx = canvas.getContext('2d');
+  const W = 380;
+  const balance = client.pedidos - client.abonos;
+  const alDia = balance <= 0;
+
+  const sorted = [...client.entries].sort((a,b) => (a._rawMs||0) - (b._rawMs||0));
+  const lineHeight = 24;
+  const headerH = 150;
+  const footerH = 90;
+  const H = headerH + (sorted.length * lineHeight) + 70 + footerH;
+
+  canvas.width = W * 2; canvas.height = H * 2;
+  ctx.scale(2, 2);
+
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#f5a623';
+  ctx.font = '900 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('🍬 Mekatikos', W/2, 34);
+
+  ctx.fillStyle = '#8888aa';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('Estado de cuenta — fiado', W/2, 52);
+
+  ctx.strokeStyle = '#2a2a50';
+  ctx.beginPath(); ctx.moveTo(20, 64); ctx.lineTo(W-20, 64); ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#eaeaea';
+  ctx.font = '700 16px sans-serif';
+  ctx.fillText(client.cliente, 20, 88);
+  ctx.fillStyle = '#8888aa';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(`Piso ${client.piso} · ${client.area}`, 20, 106);
+  ctx.fillText(`Generado: ${new Date().toLocaleDateString('es-CO')}`, 20, 122);
+
+  ctx.beginPath(); ctx.moveTo(20, 136); ctx.lineTo(W-20, 136); ctx.stroke();
+
+  let y = 136 + 26;
+  ctx.font = '11px sans-serif';
+  sorted.forEach(e => {
+    const isPedido = e.tipo === 'Pedido';
+    const desc = isPedido ? (e.nota || 'Pedido') : `Abono${e.metodo ? ' · '+e.metodo : ''}`;
+    const shortDesc = desc.length > 32 ? desc.slice(0,30)+'…' : desc;
+    const dateStr = (e.timestamp || '').split(',')[0];
+
+    ctx.fillStyle = '#8888aa';
+    ctx.fillText(dateStr, 20, y);
+    ctx.fillStyle = '#eaeaea';
+    ctx.fillText(shortDesc, 78, y);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = isPedido ? '#e94560' : '#2ecc71';
+    ctx.font = '700 11px sans-serif';
+    ctx.fillText(`${isPedido?'-':'+'}${fmtPrice(e.monto)}`, W-20, y);
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+
+    y += lineHeight;
+  });
+
+  ctx.beginPath(); ctx.moveTo(20, y+4); ctx.lineTo(W-20, y+4); ctx.stroke();
+  y += 30;
+
+  ctx.font = '12px sans-serif'; ctx.fillStyle = '#8888aa';
+  ctx.fillText('Total pedidos fiados', 20, y);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#eaeaea';
+  ctx.fillText(fmtPrice(client.pedidos), W-20, y);
+  ctx.textAlign = 'left';
+  y += 20;
+
+  ctx.fillStyle = '#8888aa';
+  ctx.fillText('Total abonado', 20, y);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#2ecc71';
+  ctx.fillText(fmtPrice(client.abonos), W-20, y);
+  ctx.textAlign = 'left';
+  y += 30;
+
+  ctx.fillStyle = alDia ? 'rgba(46,204,113,0.12)' : 'rgba(233,69,96,0.12)';
+  ctx.fillRect(16, y-20, W-32, 36);
+  ctx.font = '700 13px sans-serif';
+  ctx.fillStyle = alDia ? '#2ecc71' : '#e94560';
+  ctx.fillText('SALDO PENDIENTE', 24, y);
+  ctx.textAlign = 'right';
+  ctx.font = '900 16px sans-serif';
+  ctx.fillText(alDia ? '✅ Al día' : fmtPrice(balance), W-24, y);
+  ctx.textAlign = 'left';
+
+  y += 46;
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#555577';
+  ctx.textAlign = 'center';
+  ctx.fillText('Generado automáticamente por Mekatikos', W/2, y);
+}
+
+window.openTicketModal = function() {
+  if (!activeCreditClient) return;
+  const canvas = document.getElementById('ticketCanvas');
+  drawCreditTicket(canvas, activeCreditClient);
+  document.getElementById('ticketModalOverlay').classList.add('open');
+
+  const shareBtn = document.getElementById('ticketShareBtn');
+  shareBtn.style.display = (navigator.share && navigator.canShare) ? 'block' : 'none';
+};
+
+window.closeTicketModal = function() {
+  document.getElementById('ticketModalOverlay').classList.remove('open');
+};
+
+function ticketFileName(client) {
+  const safe = client.cliente.toLowerCase().replace(/[^a-z0-9]+/g,'_');
+  return `mekatikos_${safe}_${Date.now()}.png`;
+}
+
+window.shareTicket = async function() {
+  if (!activeCreditClient) return;
+  const canvas = document.getElementById('ticketCanvas');
+  canvas.toBlob(async (blob) => {
+    if (!blob) { toast('Error al generar la imagen', 'error'); return; }
+    const file = new File([blob], ticketFileName(activeCreditClient), { type: 'image/png' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Estado de cuenta Mekatikos',
+          text: `Hola ${activeCreditClient.cliente}, este es tu estado de cuenta con Mekatikos 🍬`
+        });
+      } else {
+        toast('Tu navegador no permite compartir imágenes directamente — descárgala', 'error');
+      }
+    } catch(e) { /* usuario canceló el share */ }
+  }, 'image/png');
+};
+
+window.downloadTicket = function() {
+  if (!activeCreditClient) return;
+  const canvas = document.getElementById('ticketCanvas');
+  const link = document.createElement('a');
+  link.download = ticketFileName(activeCreditClient);
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+};
+
+// ═══════════════════════════════════════════════
 //  FIADOS — CRUD desde el panel admin
 // ═══════════════════════════════════════════════
 let fiadoSearchQuery = '';
@@ -3020,6 +3168,8 @@ loadFiados();
         </div>
       </div>
 
+      <button class="btn btn-gold btn-sm" style="width:100%" onclick="openTicketModal()">🎫 Generar ticket para enviar</button>
+
       <!-- Abono form -->
       <div class="abono-divider">Registrar abono</div>
       <div class="abono-form">
@@ -3229,6 +3379,16 @@ loadFiados();
         <button class="btn btn-outline btn-sm" style="width:100%;border-color:var(--accent);color:var(--accent);display:none" id="fiadoDeleteBtn" onclick="confirmDeleteFiado()">🗑️ Eliminar fiado</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ===== MODAL TICKET DE CRÉDITO ===== -->
+<div class="qr-modal-overlay" id="ticketModalOverlay" onclick="if(event.target===this)closeTicketModal()">
+  <div class="qr-modal-box" style="max-width:380px">
+    <canvas id="ticketCanvas" style="width:100%;border-radius:12px"></canvas>
+    <button class="qr-modal-whatsapp" id="ticketShareBtn" onclick="shareTicket()" style="background:#25D366">📤 Compartir por WhatsApp</button>
+    <button class="qr-modal-whatsapp" onclick="downloadTicket()" style="background:var(--gold);color:#111">💾 Descargar imagen</button>
+    <button class="qr-modal-close" onclick="closeTicketModal()">Cerrar</button>
   </div>
 </div>
 
