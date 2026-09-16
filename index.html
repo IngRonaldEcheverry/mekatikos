@@ -1619,13 +1619,45 @@ window.qsClearSearch = function() {
   window.renderQuickSaleGrid();
 };
 
+let qsActiveCategory = 'Todos';
+
+function buildQsCatTabs() {
+  const wrap = document.getElementById('qsCatTabs');
+  if (!wrap) return;
+  const inStock = products.filter(p => Number(p.stock) > 0);
+  const cats = ['Todos', ...Object.keys(CAT_CONFIG)];
+  const counts = {};
+  inStock.forEach(p => { const c = p.categoria || 'Sin categoría'; counts[c] = (counts[c]||0)+1; });
+  wrap.innerHTML = cats.map(c => {
+    const icon = c === 'Todos' ? '🛍️' : (CAT_CONFIG[c] || '📦');
+    const count = c === 'Todos' ? inStock.length : (counts[c] || 0);
+    if (c !== 'Todos' && !counts[c]) return '';
+    return `<button class="cat-tab ${qsActiveCategory===c?'active':''}" onclick="qsSelectCategory('${c}')">
+      ${icon} ${c} <span class="cat-count">${count}</span></button>`;
+  }).join('');
+}
+
+window.qsSelectCategory = function(cat) {
+  qsActiveCategory = cat;
+  buildQsCatTabs();
+  window.renderQuickSaleGrid();
+};
+
 window.renderQuickSaleGrid = function() {
   const grid=document.getElementById('qsGrid');
-  if(!products.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Sin productos</div>';return;}
+  buildQsCatTabs();
 
-  const filtered = qsSearchQuery
-    ? products.filter(p => p.nombre.toLowerCase().includes(qsSearchQuery))
-    : products;
+  // Solo productos con stock disponible — igual que en la tienda, sin ruido visual
+  const inStock = products.filter(p => Number(p.stock) > 0);
+  if(!inStock.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Sin productos disponibles</div>';return;}
+
+  let filtered = inStock;
+  if (qsActiveCategory !== 'Todos') {
+    filtered = filtered.filter(p => (p.categoria || '') === qsActiveCategory);
+  }
+  if (qsSearchQuery) {
+    filtered = filtered.filter(p => p.nombre.toLowerCase().includes(qsSearchQuery));
+  }
 
   if (!filtered.length) {
     grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">
@@ -1635,32 +1667,35 @@ window.renderQuickSaleGrid = function() {
   }
 
   const cardHtml = (p) => {
-    const oos=Number(p.stock)<=0, qty=qsCart[p.nombre]||0;
+    const stock = Number(p.stock)||0, qty=qsCart[p.nombre]||0;
     const raw=(p.imagen||p.emoji||'').toString().trim();
     let imgHtml=`<span style="font-size:1.8rem">🍬</span>`;
     if(raw.startsWith('http')){let u=raw;const m=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;imgHtml=`<img src="${u}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`;} else if(raw){imgHtml=`<span style="font-size:1.8rem">${raw}</span>`;}
     const safe=p.nombre.replace(/'/g,"\\'");
-    return `<div class="qs-card ${oos?'qs-oos':''} ${qty>0?'qs-added':''}" id="qsc-${encodeId(p.nombre)}" onclick="qsAdd('${safe}')">
+    return `<div class="qs-card ${qty>0?'qs-added':''}" id="qsc-${encodeId(p.nombre)}" onclick="qsAdd('${safe}')">
       <div class="qs-img-wrap">${imgHtml}</div>
       <div class="qs-name">${p.nombre}</div>
       <div class="qs-price">${fmtPrice(p.precio)}</div>
-      ${qty>0?`<div class="qs-qty-row"><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',-1)">−</button><span style="font-weight:700;font-size:.85rem">${qty}</span><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',1)">+</button></div>`:oos?`<span style="font-size:.72rem;color:var(--accent)">Agotado</span>`:`<span style="font-size:.72rem;color:var(--muted)">Toca para agregar</span>`}
+      <div class="qs-stock">${stock} disp.</div>
+      ${qty>0?`<div class="qs-qty-row"><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',-1)">−</button><span style="font-weight:700;font-size:.85rem">${qty}</span><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',1)">+</button></div>`:`<span style="font-size:.72rem;color:var(--muted)">Toca para agregar</span>`}
     </div>`;
   };
 
-  // Separar seleccionados del resto — los seleccionados van primero y bien visibles
-  const selected = filtered.filter(p => (qsCart[p.nombre]||0) > 0);
-  const rest = filtered.filter(p => (qsCart[p.nombre]||0) === 0);
-
-  let html = '';
-  if (selected.length) {
-    html += `<div class="cat-group-label" style="grid-column:1/-1"><span>✅ Ya seleccionados (${selected.length})</span></div>`;
-    html += selected.map(cardHtml).join('');
-    html += `<div class="cat-group-label" style="grid-column:1/-1"><span>🛍️ Resto de productos</span></div>`;
+  // Ordenar alfabéticamente, agrupado por categoría solo en "Todos" sin búsqueda
+  if (qsActiveCategory === 'Todos' && !qsSearchQuery) {
+    const groups = {};
+    filtered.forEach(p => { const c = p.categoria || 'Otros'; if(!groups[c]) groups[c]=[]; groups[c].push(p); });
+    Object.values(groups).forEach(arr => arr.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es')));
+    const keys = [...Object.keys(CAT_CONFIG), 'Otros', 'Sin categoría'].filter(k => groups[k]);
+    grid.innerHTML = keys.map(cat => {
+      const icon = CAT_CONFIG[cat] || '📦';
+      return `<div class="cat-group-label" style="grid-column:1/-1"><span>${icon} ${cat}</span></div>` + groups[cat].map(cardHtml).join('');
+    }).join('');
+  } else {
+    const sorted = [...filtered].sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
+    grid.innerHTML = sorted.map(cardHtml).join('');
   }
-  html += rest.map(cardHtml).join('');
 
-  grid.innerHTML = html;
   updateQsSummary();
 };
 window.qsAdd = function(name) {
@@ -1699,12 +1734,32 @@ function updateQsSummary() {
   const btn=document.getElementById('qsConfirmBtn');
   const clearBtn=document.getElementById('clearQsBtn');
   if (clearBtn) clearBtn.style.display = entries.length ? 'block' : 'none';
+  renderQsSelectedBar(entries);
   if(!entries.length){document.getElementById('qsSummaryItems').textContent='Ningún producto seleccionado';document.getElementById('qsTotal').textContent='$0';if(btn)btn.disabled=true;return;}
   if(btn)btn.disabled=false;
   document.getElementById('qsSummaryItems').textContent=entries.map(([n,q])=>`${n} x${q}`).join(', ');
   const total=entries.reduce((s,[n,q])=>{const p=products.find(x=>x.nombre===n);return s+(p?Number(p.precio)*q:0);},0);
   document.getElementById('qsTotal').textContent=fmtPrice(total);
 }
+
+function renderQsSelectedBar(entries) {
+  const bar = document.getElementById('qsSelectedBar');
+  if (!bar) return;
+  if (!entries.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = 'flex';
+  const chips = entries.map(([n,q]) => {
+    const safe = n.replace(/'/g,"\\'");
+    return `<span class="qs-chip">${n} <span class="qsc-qty">x${q}</span>
+      <button class="qsc-remove" onclick="event.stopPropagation();qsRemoveFromBar('${safe}')">✕</button>
+    </span>`;
+  }).join('');
+  bar.innerHTML = `<span class="qsb-label">✅ Elegidos:</span>${chips}`;
+}
+
+window.qsRemoveFromBar = function(name) {
+  delete qsCart[name];
+  window.renderQuickSaleGrid();
+};
 
 window.confirmClearQuickSale = function() {
   if (!Object.keys(qsCart).length) return;
@@ -2361,6 +2416,31 @@ loadFiados();
   }
   .qs-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
   .qs-name { font-size: 0.78rem; font-weight: 600; line-height: 1.2; }
+  .qs-stock { font-size: 0.68rem; color: var(--muted); }
+
+  /* ===== FRANJA FIJA DE SELECCIONADOS (Venta Rápida) ===== */
+  .qs-selected-bar {
+    background: rgba(233,69,96,0.08); border: 1.5px solid var(--accent);
+    border-radius: 12px; padding: 10px 12px; margin-bottom: 14px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  }
+  .qs-selected-bar .qsb-label {
+    font-size: 0.75rem; font-weight: 700; color: var(--accent);
+    white-space: nowrap; margin-right: 2px;
+  }
+  .qs-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--card); border: 1px solid var(--accent);
+    border-radius: 50px; padding: 4px 6px 4px 12px;
+    font-size: 0.78rem; font-weight: 600;
+  }
+  .qs-chip .qsc-qty { color: var(--accent); font-weight: 700; }
+  .qs-chip .qsc-remove {
+    background: var(--accent); color: #fff; border: none;
+    width: 18px; height: 18px; border-radius: 50%;
+    font-size: 0.7rem; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
   .qs-price { font-size: 0.82rem; color: var(--gold); font-weight: 700; }
   .qs-qty-row {
     display: flex; align-items: center; gap: 6px; justify-content: center;
@@ -2625,13 +2705,15 @@ loadFiados();
               Vaciar
             </button>
           </div>
-          <div class="search-wrap" style="margin-bottom:14px">
+          <div class="search-wrap" style="margin-bottom:12px">
             <span class="search-icon">🔍</span>
             <input type="text" class="search-input" id="qsSearchInput"
               placeholder="Buscar producto... ej: Oreo, Chocolatina"
               oninput="qsOnSearch(this.value)">
             <button class="search-clear" id="qsSearchClear" onclick="qsClearSearch()">✕</button>
           </div>
+          <div class="qs-selected-bar" id="qsSelectedBar" style="display:none"></div>
+          <div class="cat-tabs" id="qsCatTabs" style="margin-bottom:14px"></div>
           <div class="qs-grid" id="qsGrid">
             <div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px">Cargando productos...</div>
           </div>
