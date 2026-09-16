@@ -1473,6 +1473,22 @@ window.confirmDeleteClientCredit = async function() {
 // ═══════════════════════════════════════════════
 //  TICKET DE CRÉDITO — imagen para enviar al cliente
 // ═══════════════════════════════════════════════
+function computeTicketHeight(entriesCount, includeHistory) {
+  const M = 14;
+  let y = M + 152 + 26; // hasta el inicio del historial
+  if (includeHistory) {
+    y += entriesCount * 24; // filas del historial
+    y += 30;                // separador + espacio tras historial
+  } else {
+    y += 10;
+  }
+  y += 20;  // fila "Total abonado"
+  y += 32;  // hasta el texto del saldo
+  y += 48;  // tras la caja de saldo
+  y += 16;  // segunda línea del pie de página
+  return y + 26 + M; // aire debajo del pie + margen inferior
+}
+
 function drawCreditTicket(canvas, client, includeHistory = true) {
   const ctx = canvas.getContext('2d');
   const W = 380;
@@ -1484,16 +1500,11 @@ function drawCreditTicket(canvas, client, includeHistory = true) {
     ? [...client.entries].sort((a,b) => (a._rawMs||0) - (b._rawMs||0))
     : [];
   const lineHeight = 24;
-  const headerH = 172;
-  const footerH = 100;
-  const H = headerH + (sorted.length * lineHeight) + 78 + footerH;
+  const H = computeTicketHeight(sorted.length, includeHistory);
 
   canvas.width = W * 2; canvas.height = H * 2;
   ctx.scale(2, 2);
-
-  // ── Fondo general (detrás del marco) ──
-  ctx.fillStyle = '#08080f';
-  ctx.fillRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, H); // fondo transparente — se mezcla con el modal blanco, sin bordes negros
 
   // ── Cuerpo del ticket ──
   const bx = M, by = M, bw = W - M*2, bh = H - M*2;
