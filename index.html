@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mekatikos </title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍬</text></svg>">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d0d1a">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
 <!-- ═══════════════════════════════════════════════
@@ -215,6 +217,7 @@ window.logoutAdmin = async function() {
   document.getElementById('adminEmail').value = '';
   document.title = ORIGINAL_TITLE;
   lastOrderCount = 0;
+  if ('clearAppBadge' in navigator) { try { navigator.clearAppBadge(); } catch(e){} }
   showStore();
 };
 
@@ -1193,12 +1196,22 @@ function updateTabTitle(pendingCount) {
 
 function updatePendingBadge(pendingCount) {
   const badge = document.getElementById('pendingOrdersBadge');
-  if (!badge) return;
-  if (pendingCount > 0) {
-    badge.textContent = pendingCount;
-    badge.style.display = 'flex';
-  } else {
-    badge.style.display = 'none';
+  if (badge) {
+    if (pendingCount > 0) {
+      badge.textContent = pendingCount;
+      badge.style.display = 'flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  // Badge en el ícono de la app — solo funciona si la app está instalada
+  // (Android/Chrome). En navegador normal simplemente no hace nada.
+  if ('setAppBadge' in navigator) {
+    try {
+      if (pendingCount > 0) navigator.setAppBadge(pendingCount);
+      else navigator.clearAppBadge();
+    } catch(e) { /* API no disponible en este contexto — sin problema */ }
   }
 }
 
