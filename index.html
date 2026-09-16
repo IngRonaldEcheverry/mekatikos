@@ -1476,6 +1476,7 @@ window.confirmDeleteClientCredit = async function() {
 function drawCreditTicket(canvas, client, includeHistory = true) {
   const ctx = canvas.getContext('2d');
   const W = 380;
+  const M = 14; // margen exterior del marco
   const balance = client.pedidos - client.abonos;
   const alDia = balance <= 0;
 
@@ -1483,97 +1484,175 @@ function drawCreditTicket(canvas, client, includeHistory = true) {
     ? [...client.entries].sort((a,b) => (a._rawMs||0) - (b._rawMs||0))
     : [];
   const lineHeight = 24;
-  const headerH = 150;
-  const footerH = 90;
-  const H = headerH + (sorted.length * lineHeight) + 70 + footerH;
+  const headerH = 172;
+  const footerH = 100;
+  const H = headerH + (sorted.length * lineHeight) + 78 + footerH;
 
   canvas.width = W * 2; canvas.height = H * 2;
   ctx.scale(2, 2);
 
-  ctx.fillStyle = '#0d0d1a';
+  // ── Fondo general (detrás del marco) ──
+  ctx.fillStyle = '#08080f';
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = '#f5a623';
-  ctx.font = '900 22px sans-serif';
+  // ── Cuerpo del ticket ──
+  const bx = M, by = M, bw = W - M*2, bh = H - M*2;
+  ctx.fillStyle = '#12122a';
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 14);
+  ctx.fill();
+
+  // ── Muescas laterales estilo boleta (a la altura de la franja de rayas) ──
+  const notchY = by + 58;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath(); ctx.arc(bx, notchY, 9, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bx+bw, notchY, 9, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // ── Marco exterior punteado dorado ──
+  ctx.strokeStyle = '#f5a623';
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 14);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // ── Franja de rayas de dulce (candy stripe) bajo el encabezado ──
+  const stripeY = notchY;
+  const stripeColors = ['#e94560', '#f5a623'];
+  const stripeW = 10;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(bx+3, stripeY-3, bw-6, 6);
+  ctx.clip();
+  let sx = bx - 10;
+  let ci = 0;
+  while (sx < bx + bw + 10) {
+    ctx.fillStyle = stripeColors[ci % 2];
+    ctx.beginPath();
+    ctx.moveTo(sx, stripeY+6);
+    ctx.lineTo(sx+stripeW, stripeY+6);
+    ctx.lineTo(sx+stripeW+8, stripeY-6);
+    ctx.lineTo(sx+8, stripeY-6);
+    ctx.closePath();
+    ctx.fill();
+    sx += stripeW; ci++;
+  }
+  ctx.restore();
+
+  // ── Encabezado ──
   ctx.textAlign = 'center';
-  ctx.fillText('🍬 Mekatikos', W/2, 34);
+  ctx.fillStyle = '#f5a623';
+  ctx.font = '900 24px Poppins, sans-serif';
+  ctx.fillText('🍬 MEKATIKOS', W/2, by + 32);
 
   ctx.fillStyle = '#8888aa';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('Estado de cuenta — fiado', W/2, 52);
+  ctx.font = '600 11px Inter, sans-serif';
+  ctx.fillText('T I C K E T   D E   C R É D I T O', W/2, by + 48);
 
-  ctx.strokeStyle = '#2a2a50';
-  ctx.beginPath(); ctx.moveTo(20, 64); ctx.lineTo(W-20, 64); ctx.stroke();
+  // Sello de "ticket" con número
+  const ticketNo = String(Date.now()).slice(-6);
+  ctx.fillStyle = '#555577';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.fillText(`N.° ${ticketNo}`, W/2, by + 78);
 
+  // ── Datos del cliente ──
   ctx.textAlign = 'left';
   ctx.fillStyle = '#eaeaea';
-  ctx.font = '700 16px sans-serif';
-  ctx.fillText(client.cliente, 20, 88);
+  ctx.font = '700 17px Poppins, sans-serif';
+  ctx.fillText(`👤 ${client.cliente}`, bx+18, by + 104);
   ctx.fillStyle = '#8888aa';
-  ctx.font = '12px sans-serif';
-  ctx.fillText(`Piso ${client.piso} · ${client.area}`, 20, 106);
-  ctx.fillText(`Generado: ${new Date().toLocaleDateString('es-CO')}`, 20, 122);
+  ctx.font = '12px Inter, sans-serif';
+  ctx.fillText(`Piso ${client.piso} · ${client.area}`, bx+18, by + 122);
+  ctx.fillText(`Generado: ${new Date().toLocaleDateString('es-CO')}`, bx+18, by + 138);
 
-  ctx.beginPath(); ctx.moveTo(20, 136); ctx.lineTo(W-20, 136); ctx.stroke();
+  // Separador punteado
+  function dashedLine(yPos) {
+    ctx.strokeStyle = '#2a2a50';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(bx+16, yPos); ctx.lineTo(bx+bw-16, yPos); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  dashedLine(by + 152);
 
-  let y = 136 + 26;
+  let y = by + 152 + 26;
 
   if (includeHistory) {
-    ctx.font = '11px sans-serif';
+    ctx.font = '11px Inter, sans-serif';
     sorted.forEach(e => {
       const isPedido = e.tipo === 'Pedido';
       const desc = isPedido ? (e.nota || 'Pedido') : `Abono${e.metodo ? ' · '+e.metodo : ''}`;
-      const shortDesc = desc.length > 32 ? desc.slice(0,30)+'…' : desc;
+      const shortDesc = desc.length > 30 ? desc.slice(0,28)+'…' : desc;
       const dateStr = (e.timestamp || '').split(',')[0];
 
+      ctx.textAlign = 'left';
       ctx.fillStyle = '#8888aa';
-      ctx.fillText(dateStr, 20, y);
+      ctx.fillText(dateStr, bx+18, y);
       ctx.fillStyle = '#eaeaea';
-      ctx.fillText(shortDesc, 78, y);
+      ctx.fillText(shortDesc, bx+74, y);
 
       ctx.textAlign = 'right';
       ctx.fillStyle = isPedido ? '#e94560' : '#2ecc71';
-      ctx.font = '700 11px sans-serif';
-      ctx.fillText(`${isPedido?'-':'+'}${fmtPrice(e.monto)}`, W-20, y);
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'left';
+      ctx.font = '700 11px Inter, sans-serif';
+      ctx.fillText(`${isPedido?'-':'+'}${fmtPrice(e.monto)}`, bx+bw-18, y);
+      ctx.font = '11px Inter, sans-serif';
 
       y += lineHeight;
     });
-    ctx.beginPath(); ctx.moveTo(20, y+4); ctx.lineTo(W-20, y+4); ctx.stroke();
+    dashedLine(y + 4);
     y += 30;
   } else {
     y += 10;
   }
 
-  ctx.font = '12px sans-serif'; ctx.fillStyle = '#8888aa';
-  ctx.fillText('Total pedidos fiados', 20, y);
+  ctx.textAlign = 'left';
+  ctx.font = '12px Inter, sans-serif'; ctx.fillStyle = '#8888aa';
+  ctx.fillText('🛍️ Total pedidos fiados', bx+18, y);
   ctx.textAlign = 'right'; ctx.fillStyle = '#eaeaea';
-  ctx.fillText(fmtPrice(client.pedidos), W-20, y);
+  ctx.fillText(fmtPrice(client.pedidos), bx+bw-18, y);
   ctx.textAlign = 'left';
   y += 20;
 
   ctx.fillStyle = '#8888aa';
-  ctx.fillText('Total abonado', 20, y);
+  ctx.fillText('💰 Total abonado', bx+18, y);
   ctx.textAlign = 'right'; ctx.fillStyle = '#2ecc71';
-  ctx.fillText(fmtPrice(client.abonos), W-20, y);
+  ctx.fillText(fmtPrice(client.abonos), bx+bw-18, y);
   ctx.textAlign = 'left';
-  y += 30;
+  y += 32;
 
-  ctx.fillStyle = alDia ? 'rgba(46,204,113,0.12)' : 'rgba(233,69,96,0.12)';
-  ctx.fillRect(16, y-20, W-32, 36);
-  ctx.font = '700 13px sans-serif';
+  // ── Caja de saldo destacada, redondeada ──
+  const boxY = y - 22, boxH = 42;
+  ctx.fillStyle = alDia ? 'rgba(46,204,113,0.14)' : 'rgba(233,69,96,0.14)';
+  ctx.beginPath();
+  ctx.roundRect(bx+12, boxY, bw-24, boxH, 10);
+  ctx.fill();
+  ctx.strokeStyle = alDia ? '#2ecc71' : '#e94560';
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4,3]);
+  ctx.beginPath();
+  ctx.roundRect(bx+12, boxY, bw-24, boxH, 10);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.font = '700 12px Inter, sans-serif';
   ctx.fillStyle = alDia ? '#2ecc71' : '#e94560';
-  ctx.fillText('SALDO PENDIENTE', 24, y);
+  ctx.fillText('SALDO PENDIENTE', bx+24, y);
   ctx.textAlign = 'right';
-  ctx.font = '900 16px sans-serif';
-  ctx.fillText(alDia ? '✅ Al día' : fmtPrice(balance), W-24, y);
+  ctx.font = '900 17px Poppins, sans-serif';
+  ctx.fillText(alDia ? '✅ Al día' : fmtPrice(balance), bx+bw-24, y);
   ctx.textAlign = 'left';
 
-  y += 46;
-  ctx.font = '10px sans-serif'; ctx.fillStyle = '#555577';
+  y += 48;
+  dashedLine(y - 14);
+
+  ctx.font = '600 11px Poppins, sans-serif'; ctx.fillStyle = '#f5a623';
   ctx.textAlign = 'center';
-  ctx.fillText('Generado automáticamente por Mekatikos', W/2, y);
+  ctx.fillText('¡Gracias por tu preferencia! 🍭', W/2, y);
+  ctx.font = '9px Inter, sans-serif'; ctx.fillStyle = '#555577';
+  ctx.fillText('Generado automáticamente por Mekatikos', W/2, y + 16);
 }
 
 window.openTicketModal = function() {
