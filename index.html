@@ -540,7 +540,7 @@ window.submitAbono = async function() {
   const balance = activeCreditClient.pedidos - activeCreditClient.abonos;
   if (monto > balance+1) { toast(`El abono supera el saldo (${fmtPrice(balance)})`,'error'); return; }
 
-  const btn = document.querySelector('#creditModalOverlay .btn-gold');
+  const btn = document.getElementById('abonoSubmitBtn');
   btn.textContent='⏳ Registrando...'; btn.disabled=true;
 
   try {
@@ -3285,7 +3285,7 @@ loadFiados();
           </select>
         </div>
         <textarea id="abonoNota" placeholder="Nota opcional (ej: abono semana 1)"></textarea>
-        <button class="btn btn-gold" onclick="submitAbono()" style="width:100%;padding:11px">💰 Registrar abono</button>
+        <button class="btn btn-gold" onclick="submitAbono()" style="width:100%;padding:11px" id="abonoSubmitBtn">💰 Registrar abono</button>
       </div>
 
       <!-- History -->
