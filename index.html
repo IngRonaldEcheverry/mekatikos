@@ -22,7 +22,8 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/fireba
 import {
   getFirestore, collection, doc,
   getDocs, addDoc, updateDoc, deleteDoc, onSnapshot,
-  query, orderBy, serverTimestamp, where
+  query, orderBy, serverTimestamp, where,
+  runTransaction, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
@@ -52,6 +53,41 @@ const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
 const COL_INGRESOS  = 'ingresos';
 const COL_FIADOS    = 'fiados';
+
+// ─── SEGURIDAD: escapar texto antes de insertarlo en HTML ──────
+// Todo dato que viene de Firestore (clientes, notas, productos) debe pasar por esc()
+// al armar HTML con innerHTML, para que nunca se ejecute como código.
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Texto seguro dentro de onclick="fn('...')"
+const jsq = s => esc(String(s ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+// encodeURIComponent que también codifica la comilla simple
+const encAttr = s => encodeURIComponent(String(s ?? '')).replace(/'/g,'%27');
+
+// ─── OPERACIONES ATÓMICAS ──────────────────────────────────────
+// Lee el stock REAL en Firestore (no el que quedó en memoria) y calcula el nuevo.
+// Debe llamarse dentro de runTransaction y ANTES de cualquier tx.set/update/delete.
+async function leerStockTx(tx, items) {
+  const out = [];
+  for (const item of items) {
+    const p = products.find(x => x.nombre === item.nombre);
+    if (!p || !p.id) continue;
+    const ref  = doc(db, COL_PRODUCTOS, p.id);
+    const snap = await tx.get(ref);
+    const actual = snap.exists() ? (Number(snap.data().stock) || 0) : 0;
+    out.push({ ref, p, nuevo: Math.max(0, actual - item.qty) });
+  }
+  return out;
+}
+// Ejecuta una lista de operaciones por lotes (Firestore permite máx. 500 por lote)
+async function batchEnLotes(docsRefs, aplicar) {
+  for (let i = 0; i < docsRefs.length; i += 400) {
+    const b = writeBatch(db);
+    docsRefs.slice(i, i + 400).forEach(r => aplicar(b, r));
+    await b.commit();
+  }
+}
+// Evita doble clic: una misma acción no corre dos veces a la vez
+const enCurso = new Set();
 
 // ─── NOTIFICACIÓN WHATSAPP (Green API) ──────────
 // Servicio con plan gratuito para enviarte notificaciones a tu
@@ -416,41 +452,56 @@ window.markDelivered = async function(orderId, productosEncoded) {
     return m ? { nombre: m[1].trim(), qty: parseInt(m[2]) } : null;
   }).filter(Boolean);
 
+  const lockKey = 'entregar:' + orderId;
+  if (enCurso.has(lockKey)) return;
+  enCurso.add(lockKey);
   try {
-    // Cambiar estado del pedido
-    await updateDoc(doc(db, COL_PEDIDOS, orderId), { estado: 'Entregado' });
-
-    // Descontar stock de cada producto
-    for (const item of items) {
-      const p = products.find(x => x.nombre === item.nombre);
-      if (p && p.id) {
-        const newStock = Math.max(0, (Number(p.stock)||0) - item.qty);
-        await updateDoc(doc(db, COL_PRODUCTOS, p.id), { stock: newStock });
-        p.stock = newStock; // actualizar local
-      }
-    }
+    // Todo o nada: estado del pedido + descuento de stock en una sola transacción
+    const lecturas = await runTransaction(db, async (tx) => {
+      const pedRef = doc(db, COL_PEDIDOS, orderId);
+      const ped = await tx.get(pedRef);
+      if (!ped.exists()) throw new Error('no-existe');
+      if (ped.data().estado !== 'Pedido') throw new Error('ya-procesado');
+      const l = await leerStockTx(tx, items);
+      tx.update(pedRef, { estado: 'Entregado' });
+      l.forEach(x => tx.update(x.ref, { stock: x.nuevo }));
+      return l;
+    });
+    lecturas.forEach(x => { x.p.stock = x.nuevo; }); // actualizar local
     toast('✅ Pedido marcado como entregado','success');
     buildCatTabs(); renderProducts();
   } catch(e) {
-    toast('Error al actualizar','error');
+    toast(e.message === 'ya-procesado' ? '⚠️ Este pedido ya fue procesado' : 'Error al actualizar','error');
+  } finally {
+    enCurso.delete(lockKey);
   }
 };
 
 window.rejectOrder = async function(orderId, clienteNombre) {
   if (!confirm(`¿Confirmas que el pedido de ${clienteNombre} NO se entregó?\n\nQuedará marcado como Rechazado y no afectará el inventario.`)) return;
+  const lockKey = 'rechazar:' + orderId;
+  if (enCurso.has(lockKey)) return;
+  enCurso.add(lockKey);
   try {
-    await updateDoc(doc(db, COL_PEDIDOS, orderId), { estado: 'Rechazado' });
-
-    // Si el pedido era fiado, eliminar la deuda vinculada — nunca se entregó
+    // Deuda de fiado vinculada a este pedido (si existe)
     const q = query(collection(db, COL_CREDITOS), where('pedidoId', '==', orderId));
     const snap = await getDocs(q);
-    for (const d of snap.docs) {
-      await deleteDoc(doc(db, COL_CREDITOS, d.id));
-    }
+
+    // Atómico: marcar rechazado + borrar la deuda vinculada, o nada
+    await runTransaction(db, async (tx) => {
+      const pedRef = doc(db, COL_PEDIDOS, orderId);
+      const ped = await tx.get(pedRef);
+      if (!ped.exists()) throw new Error('no-existe');
+      if (ped.data().estado !== 'Pedido') throw new Error('ya-procesado');
+      tx.update(pedRef, { estado: 'Rechazado' });
+      snap.docs.forEach(d => tx.delete(doc(db, COL_CREDITOS, d.id)));
+    });
 
     toast(snap.empty ? '❌ Pedido rechazado' : '❌ Pedido rechazado — deuda de fiado revertida', 'success');
   } catch(e) {
-    toast('Error al rechazar el pedido', 'error');
+    toast(e.message === 'ya-procesado' ? '⚠️ Este pedido ya fue procesado' : 'Error al rechazar el pedido', 'error');
+  } finally {
+    enCurso.delete(lockKey);
   }
 };
 
@@ -484,31 +535,30 @@ window.submitQuickSale = async function() {
   btn.textContent='⏳ Procesando...'; btn.disabled=true;
 
   try {
-    const pedidoRef = await addDoc(collection(db, COL_PEDIDOS), {
-      timestamp: serverTimestamp(),
-      cliente: clienteLabel, piso: pisoLabel, area: areaLabel,
-      productos: productosStr, total, pago: esFiado?'Fiar / Crédito':qsPayMethod,
-      estado: 'Entregado' // Venta Rápida siempre es entrega inmediata, sin importar el método de pago
-    });
-
-    // Descontar stock inmediatamente — aplica a todos los métodos, incluido Fiar
-    for (const item of items) {
-      const p = products.find(x=>x.nombre===item.nombre);
-      if (p&&p.id) {
-        const newStock = Math.max(0,(Number(p.stock)||0)-item.qty);
-        await updateDoc(doc(db,COL_PRODUCTOS,p.id),{ stock:newStock });
-        p.stock = newStock;
-      }
-    }
-
-    // Si es Fiar, además queda registrada la deuda en Créditos
-    if (esFiado) {
-      await addDoc(collection(db, COL_CREDITOS), {
+    // Todo o nada: pedido + descuento de stock + deuda (si es Fiar) en una sola transacción
+    const lecturas = await runTransaction(db, async (tx) => {
+      const l = await leerStockTx(tx, items);   // lecturas primero
+      const pedidoRef = doc(collection(db, COL_PEDIDOS));
+      tx.set(pedidoRef, {
         timestamp: serverTimestamp(),
-        cliente: fiadoNombre, piso: pisoLabel, area: areaLabel,
-        tipo:'Pedido', monto:total, nota:productosStr, metodo:''
+        cliente: clienteLabel, piso: pisoLabel, area: areaLabel,
+        productos: productosStr, total, pago: esFiado?'Fiar / Crédito':qsPayMethod,
+        estado: 'Entregado' // Venta Rápida siempre es entrega inmediata, sin importar el método de pago
       });
-    }
+      // Descontar stock inmediatamente — aplica a todos los métodos, incluido Fiar
+      l.forEach(x => tx.update(x.ref, { stock: x.nuevo }));
+      // Si es Fiar, además queda registrada la deuda en Créditos
+      if (esFiado) {
+        tx.set(doc(collection(db, COL_CREDITOS)), {
+          timestamp: serverTimestamp(),
+          cliente: fiadoNombre, piso: pisoLabel, area: areaLabel,
+          tipo:'Pedido', monto:total, nota:productosStr, metodo:'',
+          pedidoId: pedidoRef.id
+        });
+      }
+      return l;
+    });
+    lecturas.forEach(x => { x.p.stock = x.nuevo; });
 
     toast(esFiado
       ? `📒 Fiado registrado para ${fiadoNombre} — ${fmtPrice(total)}`
@@ -612,29 +662,36 @@ window.submitIngreso = async function() {
   btn.textContent = '⏳ Registrando...'; btn.disabled = true;
 
   try {
-    // 1. Actualizar stock del producto (y costo si cambió)
-    const updateFields = { stock: stockNuevo };
-    if (nuevoCosto !== '' && Number(nuevoCosto) !== Number(p.costo)) {
-      updateFields.costo = Number(nuevoCosto);
-    }
-    await updateDoc(doc(db, COL_PRODUCTOS, p.id), updateFields);
+    // Todo o nada: stock + historial de ingreso, partiendo del stock REAL en Firestore
+    const res = await runTransaction(db, async (tx) => {
+      const ref  = doc(db, COL_PRODUCTOS, p.id);
+      const snap = await tx.get(ref);
+      const stockReal = snap.exists() ? (Number(snap.data().stock) || 0) : 0;
+      const costoReal = snap.exists() ? Number(snap.data().costo) : Number(p.costo);
+      const nuevoStock = stockReal + cantidad;
+      const costoU = nuevoCosto !== '' ? Number(nuevoCosto) : (costoReal || 0);
 
-    // 2. Registrar el ingreso en el historial
-    await addDoc(collection(db, COL_INGRESOS), {
-      timestamp: serverTimestamp(),
-      productoId: p.id,
-      producto: p.nombre,
-      cantidad,
-      costoUnitario,
-      total: cantidad * costoUnitario,
-      stockAnterior,
-      stockNuevo,
-      nota
+      const updateFields = { stock: nuevoStock };
+      if (nuevoCosto !== '' && Number(nuevoCosto) !== costoReal) updateFields.costo = Number(nuevoCosto);
+      tx.update(ref, updateFields);
+
+      tx.set(doc(collection(db, COL_INGRESOS)), {
+        timestamp: serverTimestamp(),
+        productoId: p.id,
+        producto: p.nombre,
+        cantidad,
+        costoUnitario: costoU,
+        total: cantidad * costoU,
+        stockAnterior: stockReal,
+        stockNuevo: nuevoStock,
+        nota
+      });
+      return { nuevoStock, costo: updateFields.costo };
     });
 
     // Actualizar en memoria
-    p.stock = stockNuevo;
-    if (updateFields.costo !== undefined) p.costo = updateFields.costo;
+    p.stock = res.nuevoStock;
+    if (res.costo !== undefined) p.costo = res.costo;
 
     toast(`📥 Ingreso registrado — +${cantidad} unidades de ${p.nombre}`, 'success');
     closeIngresoModal();
@@ -662,11 +719,11 @@ window.loadIngresosHistorial = async function() {
       const ts = i.timestamp?.toDate ? i.timestamp.toDate().toLocaleString('es-CO') : '—';
       return `<tr>
         <td style="font-size:0.82rem;color:var(--muted)">${ts}</td>
-        <td><strong>${i.producto}</strong></td>
+        <td><strong>${esc(i.producto)}</strong></td>
         <td style="color:var(--success);font-weight:600">+${i.cantidad}</td>
         <td>${fmtPrice(i.costoUnitario)}</td>
         <td style="color:var(--gold)">${fmtPrice(i.total)}</td>
-        <td style="font-size:0.8rem;color:var(--muted)">${i.nota || '—'}</td>
+        <td style="font-size:0.8rem;color:var(--muted)">${esc(i.nota || '—')}</td>
       </tr>`;
     }).join('');
   } catch(e) {
@@ -829,10 +886,10 @@ function getImgHtml(p) {
     let url=raw;
     const dm=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
     if(dm) url=`https://drive.google.com/thumbnail?id=${dm[1]}&sz=w200`;
-    return `<div class="product-img-wrap"><img class="product-img" src="${url}" alt="${p.nombre}"
+    return `<div class="product-img-wrap"><img class="product-img" src="${esc(url)}" alt="${esc(p.nombre)}"
       onerror="this.parentElement.innerHTML='<span style=\\'font-size:2.5rem\\'>🍬</span>'"></div>`;
   }
-  return `<div class="product-img-wrap"><span style="font-size:2.5rem">${raw}</span></div>`;
+  return `<div class="product-img-wrap"><span style="font-size:2.5rem">${esc(raw)}</span></div>`;
 }
 
 function buildCatTabs() {
@@ -874,10 +931,10 @@ function getFilteredProducts() {
 function productCardHtml(p) {
   const oos=Number(p.stock)<=0, low=Number(p.stock)>0&&Number(p.stock)<=5;
   const qty=cart[p.nombre]?cart[p.nombre].qty:0;
-  const safe=p.nombre.replace(/'/g,"\\'");
+  const safe=jsq(p.nombre);
   return `<div class="product-card ${oos?'out-of-stock':''}" id="card-${encodeId(p.nombre)}">
     ${getImgHtml(p)}
-    <div class="product-name">${p.nombre}</div>
+    <div class="product-name">${esc(p.nombre)}</div>
     <div class="product-price">${fmtPrice(p.precio)}</div>
     <div class="product-stock ${oos?'':low?'stock-low':'stock-ok'}">
       ${oos?'❌ Agotado':low?`⚠️ Solo ${p.stock} und.`:`✅ ${p.stock} disponibles`}
@@ -896,7 +953,7 @@ function renderProducts() {
   const grid=document.getElementById('productsGrid');
   const filtered=getFilteredProducts();
   if(!filtered.length){
-    const msg=searchQuery?`No encontramos "<strong>${searchQuery}</strong>" 😕`:'Sin productos en esta categoría';
+    const msg=searchQuery?`No encontramos "<strong>${esc(searchQuery)}</strong>" 😕`:'Sin productos en esta categoría';
     grid.innerHTML=`<div class="no-results"><div class="nr-icon">🔍</div><p>${msg}</p></div>`;
     return;
   }
@@ -975,19 +1032,19 @@ function renderCartItems() {
     let thumb;
     if (v.imagen && v.imagen.startsWith('http')) {
       const url = driveThumb(v.imagen, 80);
-      thumb = `<img src="${url}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0" onerror="this.style.display='none'">`;
+      thumb = `<img src="${esc(url)}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0" onerror="this.style.display='none'">`;
     } else {
-      thumb = `<span style="font-size:1.6rem;flex-shrink:0">${v.emoji||'🍬'}</span>`;
+      thumb = `<span style="font-size:1.6rem;flex-shrink:0">${esc(v.emoji||'🍬')}</span>`;
     }
     return `<div class="cart-item">${thumb}
       <div class="cart-item-info">
-        <div class="cart-item-name">${name}</div>
+        <div class="cart-item-name">${esc(name)}</div>
         <div class="cart-item-price">${fmtPrice(v.price)} c/u</div>
       </div>
       <div class="cart-item-qty">
-        <button class="qty-btn" onclick="changeQty('${name}',-1);renderCartItems()">−</button>
+        <button class="qty-btn" onclick="changeQty('${jsq(name)}',-1);renderCartItems()">−</button>
         <span class="qty-num">${v.qty}</span>
-        <button class="qty-btn" onclick="changeQty('${name}',1);renderCartItems()">+</button>
+        <button class="qty-btn" onclick="changeQty('${jsq(name)}',1);renderCartItems()">+</button>
       </div>
       <div style="font-weight:700;min-width:60px;text-align:right">${fmtPrice(v.price*v.qty)}</div>
     </div>`;
@@ -1025,7 +1082,7 @@ window.selectPay = function(method) {
         <select id="fName" onchange="autoFillFiado(this.value)"
           style="background:var(--card);border:1.5px solid #9b59b6;border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Inter',sans-serif;font-size:0.9rem;outline:none;width:100%;appearance:none;cursor:pointer">
           <option value="">— Selecciona cliente —</option>
-          ${FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('')}
+          ${FIADOS.map(f=>`<option value="${esc(f.nombre)}">${esc(f.nombre)} · Piso ${esc(f.piso)} · ${esc(f.area)}</option>`).join('')}
         </select>`;
     } else {
       nw.innerHTML=`<label>Nombre completo</label><input type="text" id="fName" placeholder="Ej: Laura Gómez">`;
@@ -1121,20 +1178,20 @@ function renderOrders() {
     const rejected  = o.estado==='Rechazado';
     const pending   = !delivered && !rejected;
     const ts=o.timestamp?.toDate?o.timestamp.toDate().toLocaleString('es-CO'):(o.timestamp||'');
-    const safeName = (o.cliente||'').replace(/'/g,"\\'");
+    const safeName = jsq(o.cliente||'');
     let badgeClass = 'badge-pending', badgeLabel = '⏳ Pedido';
     if (delivered) { badgeClass='badge-delivered'; badgeLabel='✅ Entregado'; }
     if (rejected)  { badgeClass='badge-rejected';  badgeLabel='❌ Rechazado'; }
     return `<tr>
-      <td><strong>${o.cliente}</strong><br><small style="color:var(--muted)">${ts}</small></td>
-      <td>Piso ${o.piso} · ${o.area}</td>
-      <td style="max-width:200px;word-break:break-word;font-size:0.82rem">${o.productos}</td>
+      <td><strong>${esc(o.cliente)}</strong><br><small style="color:var(--muted)">${ts}</small></td>
+      <td>Piso ${esc(o.piso)} · ${esc(o.area)}</td>
+      <td style="max-width:200px;word-break:break-word;font-size:0.82rem">${esc(o.productos)}</td>
       <td><strong style="color:var(--gold)">${fmtPrice(o.total)}</strong></td>
-      <td>${o.pago?.includes('Transferencia')||o.pago==='Transferencia'?'📲':'💵'} ${o.pago}</td>
+      <td>${o.pago?.includes('Transferencia')||o.pago==='Transferencia'?'📲':'💵'} ${esc(o.pago)}</td>
       <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
       <td>${pending
         ? `<div style="display:flex;gap:6px">
-            <button class="btn btn-success btn-sm" onclick="markDelivered('${o.id}','${encodeURIComponent(o.productos)}')">✅ Entregar</button>
+            <button class="btn btn-success btn-sm" onclick="markDelivered('${o.id}','${encAttr(o.productos)}')">✅ Entregar</button>
             <button class="btn btn-outline btn-sm" style="border-color:var(--accent);color:var(--accent)" onclick="rejectOrder('${o.id}','${safeName}')">❌ Rechazar</button>
           </div>`
         : '—'}</td>
@@ -1309,9 +1366,9 @@ window.renderInventory = function() {
     }
     const pct = Math.round((stock/maxStock)*100);
     const cls = stock===0?'critical':stock<=5?'low':'';
-    const safeName = p.nombre.replace(/'/g,"\\'");
+    const safeName = jsq(p.nombre);
     rows.push(`<tr>
-      <td>${p.emoji||'🍬'} <strong>${p.nombre}</strong></td>
+      <td>${esc(p.emoji||'🍬')} <strong>${esc(p.nombre)}</strong></td>
       <td style="color:var(--gold)">${fmtPrice(p.precio)}</td>
       <td style="color:var(--muted)">${fmtPrice(p.costo)}</td>
       <td><div style="display:flex;align-items:center;gap:10px">
@@ -1384,13 +1441,13 @@ function renderCreditGrid() {
   grid.innerHTML=clients.map(c=>{
     const balance=c.pedidos-c.abonos;
     const balClass=balance<=0?'clear':balance<c.pedidos?'partial':'owed';
-    return `<div class="credit-client-card ${balance<=0?'zero':''}" onclick="openCreditModal('${encodeURIComponent(c.cliente)}')">
+    return `<div class="credit-client-card ${balance<=0?'zero':''}" onclick="openCreditModal('${encAttr(c.cliente)}')">
       <div class="ccc-top">
-        <span class="credit-client-name">👤 ${c.cliente}</span>
+        <span class="credit-client-name">👤 ${esc(c.cliente)}</span>
         <span class="credit-client-balance ${balClass}">${balance<=0?'✅ Al día':fmtPrice(balance)}</span>
       </div>
       <div class="ccc-bottom">
-        <span class="credit-client-meta">Piso ${c.piso} · ${c.area}</span>
+        <span class="credit-client-meta">Piso ${esc(c.piso)} · ${esc(c.area)}</span>
         <span class="ccc-count">${c.entries.filter(e=>e.tipo==='Pedido').length}🛍️ · ${c.entries.filter(e=>e.tipo==='Abono').length}💰</span>
       </div>
     </div>`;
@@ -1423,8 +1480,8 @@ window.openCreditModal = function(encodedName) {
     <div class="credit-entry">
       <div class="credit-entry-icon ${e.tipo==='Pedido'?'entry-pedido':'entry-abono'}">${e.tipo==='Pedido'?'🛍️':'💰'}</div>
       <div class="credit-entry-info">
-        <div class="credit-entry-desc">${e.tipo==='Abono'?`Abono${e.metodo?' · '+e.metodo:''}`:e.nota||'Pedido'}</div>
-        ${e.nota&&e.tipo==='Abono'?`<div style="font-size:.72rem;color:var(--muted)">${e.nota}</div>`:''}
+        <div class="credit-entry-desc">${e.tipo==='Abono'?`Abono${e.metodo?' · '+esc(e.metodo):''}`:esc(e.nota||'Pedido')}</div>
+        ${e.nota&&e.tipo==='Abono'?`<div style="font-size:.72rem;color:var(--muted)">${esc(e.nota)}</div>`:''}
         <div class="credit-entry-date">${e.timestamp||'—'}</div>
       </div>
       <div class="credit-entry-amount ${e.tipo==='Pedido'?'entry-amt-neg':'entry-amt-pos'}">
@@ -1451,9 +1508,8 @@ window.renameClientCredit = async function() {
     const snap = await getDocs(q);
     if (snap.empty) { toast('No se encontraron registros para renombrar', 'error'); return; }
 
-    for (const d of snap.docs) {
-      await updateDoc(doc(db, COL_CREDITOS, d.id), { cliente: trimmed });
-    }
+    await batchEnLotes(snap.docs.map(d => doc(db, COL_CREDITOS, d.id)),
+      (b, ref) => b.update(ref, { cliente: trimmed }));
     toast(`✅ ${snap.size} registro(s) movidos de "${oldName}" a "${trimmed}"`, 'success');
     closeCreditModal();
   } catch(e) {
@@ -1477,9 +1533,8 @@ window.confirmDeleteClientCredit = async function() {
   try {
     const q = query(collection(db, COL_CREDITOS), where('cliente', '==', nombre));
     const snap = await getDocs(q);
-    for (const d of snap.docs) {
-      await deleteDoc(doc(db, COL_CREDITOS, d.id));
-    }
+    await batchEnLotes(snap.docs.map(d => doc(db, COL_CREDITOS, d.id)),
+      (b, ref) => b.delete(ref));
     toast(`🗑️ Historial de ${nombre} eliminado de Créditos`, 'success');
     closeCreditModal();
   } catch(e) {
@@ -1776,9 +1831,9 @@ window.renderFiadosList = function() {
 
   tbody.innerHTML = filtered.map(f => `
     <tr>
-      <td><strong>${f.nombre}</strong></td>
-      <td>${f.piso}</td>
-      <td>${f.area}</td>
+      <td><strong>${esc(f.nombre)}</strong></td>
+      <td>${esc(f.piso)}</td>
+      <td>${esc(f.area)}</td>
       <td><button class="btn btn-outline btn-sm" onclick="openFiadoModal('${f.id}')">✏️ Editar</button></td>
     </tr>`).join('');
 };
@@ -1939,11 +1994,11 @@ window.renderQuickSaleGrid = function() {
     const stock = Number(p.stock)||0, qty=qsCart[p.nombre]||0;
     const raw=(p.imagen||p.emoji||'').toString().trim();
     let imgHtml=`<span style="font-size:1.8rem">🍬</span>`;
-    if(raw.startsWith('http')){let u=raw;const m=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;imgHtml=`<img src="${u}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`;} else if(raw){imgHtml=`<span style="font-size:1.8rem">${raw}</span>`;}
-    const safe=p.nombre.replace(/'/g,"\\'");
+    if(raw.startsWith('http')){let u=raw;const m=raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/);if(m)u=`https://drive.google.com/thumbnail?id=${m[1]}&sz=w80`;imgHtml=`<img src="${esc(u)}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`;} else if(raw){imgHtml=`<span style="font-size:1.8rem">${esc(raw)}</span>`;}
+    const safe=jsq(p.nombre);
     return `<div class="qs-card ${qty>0?'qs-added':''}" id="qsc-${encodeId(p.nombre)}" onclick="qsAdd('${safe}')">
       <div class="qs-img-wrap">${imgHtml}</div>
-      <div class="qs-name">${p.nombre}</div>
+      <div class="qs-name">${esc(p.nombre)}</div>
       <div class="qs-price">${fmtPrice(p.precio)}</div>
       <div class="qs-stock">${stock} disp.</div>
       ${qty>0?`<div class="qs-qty-row"><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',-1)">−</button><span style="font-weight:700;font-size:.85rem">${qty}</span><button class="qs-qty-btn" onclick="event.stopPropagation();qsChange('${safe}',1)">+</button></div>`:`<span style="font-size:.72rem;color:var(--muted)">Toca para agregar</span>`}
@@ -1985,7 +2040,7 @@ window.qsSelectPay = function(method) {
   if(method==='Efectivo') window.qsCalcChange();
   if(method==='Fiar'){
     const sel=document.getElementById('qsFiadoSelect');
-    sel.innerHTML='<option value="">— Selecciona cliente autorizado —</option>'+FIADOS.map(f=>`<option value="${f.nombre}">${f.nombre} · Piso ${f.piso} · ${f.area}</option>`).join('');
+    sel.innerHTML='<option value="">— Selecciona cliente autorizado —</option>'+FIADOS.map(f=>`<option value="${esc(f.nombre)}">${esc(f.nombre)} · Piso ${esc(f.piso)} · ${esc(f.area)}</option>`).join('');
   } else { document.getElementById('qsFiadoSelect').value=''; }
 };
 window.qsCalcChange = function() {
@@ -2017,8 +2072,8 @@ function renderQsSelectedBar(entries) {
   if (!entries.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
   bar.style.display = 'flex';
   const chips = entries.map(([n,q]) => {
-    const safe = n.replace(/'/g,"\\'");
-    return `<span class="qs-chip">${n} <span class="qsc-qty">x${q}</span>
+    const safe = jsq(n);
+    return `<span class="qs-chip">${esc(n)} <span class="qsc-qty">x${q}</span>
       <button class="qsc-remove" onclick="event.stopPropagation();qsRemoveFromBar('${safe}')">✕</button>
     </span>`;
   }).join('');
