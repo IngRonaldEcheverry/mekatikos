@@ -2538,32 +2538,27 @@ loadFiados();
     padding: 24px 24px 0;
     display: flex; flex-direction: column; gap: 14px;
   }
-  /* ===== BOTÓN DE CABECERA "PAGAR / ABONAR" (acceso directo al QR, sin pasar por el carrito) ===== */
-  .account-btn {
-    position: relative; overflow: hidden;
-    display: inline-flex; align-items: center; gap: 6px;
-    background: linear-gradient(135deg, var(--gold), #e07b1a);
-    color: #111; border: none; border-radius: 50px;
-    padding: 9px 16px; font-size: 0.82rem; font-weight: 700;
-    font-family: 'Inter', sans-serif; cursor: pointer;
-    box-shadow: 0 3px 10px rgba(245,166,35,0.35);
-    transition: transform .15s, box-shadow .15s;
+  /* ===== BANNER "PAGAR / ABONAR" (acceso directo al QR, sin pasar por el carrito) ===== */
+  .account-banner {
+    max-width: 1100px; margin: 20px auto 0; padding: 0 24px;
   }
-  .account-btn:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(245,166,35,0.5); }
-  .account-btn::after {
-    content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
-    background: linear-gradient(120deg, transparent, rgba(255,255,255,0.55), transparent);
-    transform: skewX(-20deg);
-    animation: accountSheen 3.2s ease-in-out infinite;
+  .account-banner-inner {
+    display: flex; align-items: center; gap: 14px;
+    background: linear-gradient(135deg, rgba(245,166,35,0.14), rgba(233,69,96,0.10));
+    border: 1.5px solid var(--gold);
+    border-radius: 16px; padding: 14px 18px;
+    cursor: pointer; transition: transform .15s, background .15s;
   }
-  @keyframes accountSheen {
-    0%   { left: -60%; }
-    45%  { left: 130%; }
-    100% { left: 130%; }
-  }
+  .account-banner-inner:hover { transform: translateY(-1px); background: linear-gradient(135deg, rgba(245,166,35,0.22), rgba(233,69,96,0.14)); }
+  .account-banner-icon { font-size: 1.7rem; flex-shrink: 0; }
+  .account-banner-text { flex: 1; min-width: 0; }
+  .account-banner-text strong { display: block; font-size: 0.94rem; color: var(--text); }
+  .account-banner-text span { display: block; font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+  .account-banner-arrow { font-size: 1.4rem; color: var(--gold); flex-shrink: 0; }
   @media (max-width: 480px) {
-    .account-btn { padding: 8px 12px; font-size: 0.76rem; }
-    .account-btn .account-btn-label { display: none; }
+    .account-banner { padding: 0 16px; }
+    .account-banner-text strong { font-size: 0.86rem; }
+    .account-banner-text span { font-size: 0.72rem; }
   }
   /* Caption + copiar dentro del modal QR */
   .qr-modal-box .qr-caption-row {
@@ -3252,6 +3247,18 @@ loadFiados();
     <span class="hero-emoji">🍭🍫🍬</span>
     <h1><span class="hi">Anto</span><span class="lo">jitos</span> para tu día</h1>
     <p>Tu tienda favorita a tan sólo un Clic</p>
+  </div>
+
+  <!-- Acceso directo a la cuenta (QR + Nequi) para pagar o abonar sin pasar por el carrito -->
+  <div class="account-banner">
+    <div class="account-banner-inner" onclick="openAccountQr()">
+      <span class="account-banner-icon">💳</span>
+      <div class="account-banner-text">
+        <strong>¿Vas a pagar o abonar?</strong>
+        <span>Toca aquí para ver el QR y los datos de la cuenta</span>
+      </div>
+      <span class="account-banner-arrow">›</span>
+    </div>
   </div>
 
   <!-- Search + Category filters -->
