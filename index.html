@@ -1815,11 +1815,44 @@ function loadCatImg(url) {
     img.src = url;
   });
 }
+// Quita el fondo blanco de la foto: se recorre desde los bordes y se vuelve transparente
+// todo lo casi-blanco conectado al borde (los blancos del empaque, por dentro, se conservan).
+function catCutout(img) {
+  try {
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(img, 0, 0);
+    const im = x.getImageData(0, 0, w, h), d = im.data;
+    const isBg = i => d[i+3] < 20 || (d[i] >= 228 && d[i+1] >= 228 && d[i+2] >= 228 &&
+                      Math.max(d[i], d[i+1], d[i+2]) - Math.min(d[i], d[i+1], d[i+2]) < 22);
+    const bg = new Uint8Array(w * h), stack = [];
+    const push = (px, py) => { if (px<0||py<0||px>=w||py>=h) return; const k = py*w+px;
+      if (!bg[k] && isBg(k*4)) { bg[k] = 1; stack.push(k); } };
+    for (let i = 0; i < w; i++) { push(i, 0); push(i, h-1); }
+    for (let j = 0; j < h; j++) { push(0, j); push(w-1, j); }
+    while (stack.length) { const k = stack.pop(), px = k % w, py = (k / w) | 0;
+      push(px+1,py); push(px-1,py); push(px,py+1); push(px,py-1); }
+    let n = 0;
+    for (let k = 0; k < w*h; k++) if (bg[k]) { d[k*4+3] = 0; n++; }
+    // Suavizar el borde: píxeles pegados al fondo y muy claros pierden opacidad
+    for (let py = 1; py < h-1; py++) for (let px = 1; px < w-1; px++) {
+      const k = py*w+px; if (bg[k]) continue;
+      if (bg[k-1] || bg[k+1] || bg[k-w] || bg[k+w]) {
+        const mn = Math.min(d[k*4], d[k*4+1], d[k*4+2]);
+        if (mn > 190) d[k*4+3] = Math.max(0, 255 - (mn - 190) * 4);
+      }
+    }
+    x.putImageData(im, 0, 0);
+    c._cut = n / (w*h) > 0.12; // si había fondo blanco de verdad, se encaja entero en el cuadro
+    return c;
+  } catch(e) { return img; } // si algo falla, se usa la foto tal cual
+}
 async function getCatImg(raw) {
   if (raw in catImgCache) return catImgCache[raw];
   let img = null;
   for (const u of catImgCandidates(raw)) { img = await loadCatImg(u); if (img) break; }
-  return (catImgCache[raw] = img);
+  return (catImgCache[raw] = img ? catCutout(img) : null);
 }
 
 window.buildCatalogText = function() {
@@ -1936,21 +1969,29 @@ window.refreshCatalogPreview = async function() {
       const em = (emRaw && !emRaw.startsWith('http') && emRaw.length <= 4) ? emRaw : g.icon;
       let tx = cx, tw = COLW - priceW - 6;
       if (iconMode !== 'nombres') {
-        const IMG = 56, iy = cy + 6;
+        const IMG = 66, iy = cy + 3;
         const img = (iconMode === 'foto') ? imgs[raw] : null;
         if (img) {
           ctx.save();
           ctx.beginPath(); ctx.roundRect(cx, iy, IMG, IMG, 12); ctx.clip();
-          ctx.fillStyle = '#fff'; ctx.fillRect(cx, iy, IMG, IMG);
-          const r = Math.max(IMG / img.width, IMG / img.height); // cubrir el cuadro sin deformar
+          // Fondo del cuadro (se ve detrás de fotos con transparencia): oscuro con los tonos de la tienda
+          ctx.fillStyle = '#12122a'; ctx.fillRect(cx, iy, IMG, IMG);
+          const bg = ctx.createLinearGradient(cx, iy, cx + IMG, iy + IMG);
+          bg.addColorStop(0, 'rgba(233,69,96,.45)'); bg.addColorStop(1, 'rgba(245,166,35,.35)');
+          ctx.fillStyle = bg; ctx.fillRect(cx, iy, IMG, IMG);
+          // Foto sin fondo → encajada entera con margen; foto a sangre → cubre el cuadro sin deformar
+          const r = img._cut ? Math.min((IMG - 8) / img.width, (IMG - 8) / img.height)
+                             : Math.max(IMG / img.width, IMG / img.height);
           const dw = img.width * r, dh = img.height * r;
           ctx.drawImage(img, cx + (IMG - dw) / 2, iy + (IMG - dh) / 2, dw, dh);
           ctx.restore();
+          ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.roundRect(cx, iy, IMG, IMG, 12); ctx.stroke();
         } else {
           ctx.font = '40px sans-serif'; ctx.fillStyle = '#fff';
           ctx.fillText(em, cx, cy + 46);
         }
-        tx = cx + 68; tw = COLW - 68 - priceW - 6;
+        tx = cx + 78; tw = COLW - 78 - priceW - 6;
       }
       ctx.fillStyle = '#eaeaea';
       ctx.fillText(fit(String(p.nombre), tw), tx, cy + 38);
