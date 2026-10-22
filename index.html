@@ -1795,6 +1795,33 @@ function catalogDateLabel() {
   return new Date().toLocaleDateString('es-CO', { weekday:'long', day:'numeric', month:'long' });
 }
 
+// ─── Fotos de productos para el catálogo ───
+// Se cargan en modo CORS para poder exportar el PNG. Si una foto no carga (o el servidor
+// no lo permite), simplemente se usa el emoji — nunca se rompe la imagen.
+const catImgCache = {};
+let catRenderToken = 0;
+function catImgCandidates(raw) {
+  const m = raw.match(/\/d\/([a-zA-Z0-9_-]{10,})/) || raw.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+  if (m) return [`https://lh3.googleusercontent.com/d/${m[1]}=w160`, `https://drive.google.com/thumbnail?id=${m[1]}&sz=w160`];
+  return [raw];
+}
+function loadCatImg(url) {
+  return new Promise(res => {
+    const img = new Image();
+    const t = setTimeout(() => res(null), 7000);
+    img.crossOrigin = 'anonymous'; img.referrerPolicy = 'no-referrer';
+    img.onload  = () => { clearTimeout(t); res(img); };
+    img.onerror = () => { clearTimeout(t); res(null); };
+    img.src = url;
+  });
+}
+async function getCatImg(raw) {
+  if (raw in catImgCache) return catImgCache[raw];
+  let img = null;
+  for (const u of catImgCandidates(raw)) { img = await loadCatImg(u); if (img) break; }
+  return (catImgCache[raw] = img);
+}
+
 window.buildCatalogText = function() {
   const showPrices = document.getElementById('catShowPrices').checked;
   const showLast   = document.getElementById('catShowLast').checked;
@@ -1821,7 +1848,17 @@ window.refreshCatalogPreview = async function() {
   const showPrices = document.getElementById('catShowPrices').checked;
   const showLast   = document.getElementById('catShowLast').checked;
   const groups = catalogItems();
+  const iconMode = (document.getElementById('catIconMode') || { value: 'foto' }).value; // foto | emoji | nombres
+  const myToken = ++catRenderToken;
   try { await document.fonts.load('800 60px Poppins'); await document.fonts.load('600 28px Inter'); } catch(e) {}
+
+  // Precargar fotos (solo si se pidió ese modo)
+  const imgs = {};
+  if (iconMode === 'foto') {
+    const raws = [...new Set(groups.flatMap(g => g.items.map(p => String(p.imagen || p.emoji || '').trim())).filter(r => r.startsWith('http')))];
+    await Promise.all(raws.map(async r => { imgs[r] = await getCatImg(r); }));
+  }
+  if (myToken !== catRenderToken) return; // llegó una actualización más reciente
 
   const W = 1080, PAD = 48, GAP = 28, COLW = (W - PAD*2 - GAP) / 2;
   const HEAD = 300, CATH = 92, ROWH = 92, FOOT = 190;
@@ -1893,12 +1930,28 @@ window.refreshCatalogPreview = async function() {
       const cx = PAD + col * (COLW + GAP), cy = y + row * ROWH;
       const stock = Number(p.stock);
       const priceW = showPrices ? 128 : 0;
-      // Emoji del producto (si es emoji real) o el de la categoría
-      const raw = String(p.emoji || '').trim();
-      const em = (raw && !raw.startsWith('http') && raw.length <= 4) ? raw : g.icon;
-      ctx.font = '40px sans-serif'; ctx.fillStyle = '#fff';
-      ctx.fillText(em, cx, cy + 46);
-      const tx = cx + 62, tw = COLW - 62 - priceW - 6;
+      // Icono: foto pequeña, emoji o nada (solo nombres)
+      const raw = String(p.imagen || p.emoji || '').trim();
+      const emRaw = String(p.emoji || raw).trim();
+      const em = (emRaw && !emRaw.startsWith('http') && emRaw.length <= 4) ? emRaw : g.icon;
+      let tx = cx, tw = COLW - priceW - 6;
+      if (iconMode !== 'nombres') {
+        const IMG = 56, iy = cy + 6;
+        const img = (iconMode === 'foto') ? imgs[raw] : null;
+        if (img) {
+          ctx.save();
+          ctx.beginPath(); ctx.roundRect(cx, iy, IMG, IMG, 12); ctx.clip();
+          ctx.fillStyle = '#fff'; ctx.fillRect(cx, iy, IMG, IMG);
+          const r = Math.max(IMG / img.width, IMG / img.height); // cubrir el cuadro sin deformar
+          const dw = img.width * r, dh = img.height * r;
+          ctx.drawImage(img, cx + (IMG - dw) / 2, iy + (IMG - dh) / 2, dw, dh);
+          ctx.restore();
+        } else {
+          ctx.font = '40px sans-serif'; ctx.fillStyle = '#fff';
+          ctx.fillText(em, cx, cy + 46);
+        }
+        tx = cx + 68; tw = COLW - 68 - priceW - 6;
+      }
       ctx.fillStyle = '#eaeaea';
       ctx.fillText(fit(String(p.nombre), tw), tx, cy + 38);
       if (showLast && stock <= 5) {
@@ -3851,6 +3904,14 @@ loadFiados();
     <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#333;width:100%;cursor:pointer">
       <input type="checkbox" id="catShowLast" checked onchange="refreshCatalogPreview()" style="width:16px;height:16px;cursor:pointer">
       Resaltar "¡Últimas unidades!" (5 o menos)
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#333;width:100%">
+      Imagen de cada producto:
+      <select id="catIconMode" onchange="refreshCatalogPreview()" style="flex:1;padding:6px 8px;border-radius:8px;border:1px solid #ccc;font-size:0.82rem">
+        <option value="foto">📷 Foto pequeña</option>
+        <option value="emoji">😋 Emoji</option>
+        <option value="nombres">🔤 Solo nombres</option>
+      </select>
     </label>
     <button class="qr-modal-whatsapp" onclick="shareCatalogImage()" style="background:#25D366">📤 Compartir imagen</button>
     <button class="qr-modal-whatsapp" onclick="shareCatalogWhatsApp()" style="background:#128C7E">💬 Enviar como texto por WhatsApp</button>
