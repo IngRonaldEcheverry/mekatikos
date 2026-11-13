@@ -1249,6 +1249,13 @@ window.closeSaldoModal = function() {
   document.getElementById('saldoModalOverlay').classList.remove('open');
 };
 
+// Puente entre "Mi saldo" y el QR de pago — cierra uno y abre el otro,
+// para que el cliente no tenga que buscar un segundo botón en el header.
+window.irAPagarDesdeSaldo = function() {
+  closeSaldoModal();
+  openQrModal();
+};
+
 function tiempoDesde(ts) {
   if (!ts?.toDate) return '';
   const mins = Math.round((Date.now() - ts.toDate().getTime()) / 60000);
@@ -1287,6 +1294,7 @@ window.consultarSaldo = async function() {
       <div style="font-size:1.5rem;font-weight:800;font-family:Poppins,sans-serif;color:${color}">${msg}</div>
       ${saldo >= TOPE_FIADO ? '<div style="font-size:0.8rem;background:#fdecee;color:#e94560;padding:8px 12px;border-radius:10px;text-align:center">⚠️ Alcanzaste el tope de fiado ($'+TOPE_FIADO.toLocaleString('es-CO')+'). Abona pronto para seguir pidiendo fiado.</div>' : ''}
       <div style="font-size:0.72rem;color:#999">Actualizado ${tiempoDesde(d.actualizado)}</div>
+      ${saldo > 0 ? `<button class="qr-modal-whatsapp" style="background:var(--gold);color:#111" onclick="irAPagarDesdeSaldo()">💳 Pagar / Abonar ${fmtPrice(saldo)}</button>` : ''}
       <button class="qr-modal-whatsapp" style="background:#9b59b6" onclick="document.getElementById('saldoFormBox').style.display='flex';document.getElementById('saldoResultBox').style.display='none';document.getElementById('saldoCodigoInput').value=''">🔁 Consultar otro código</button>
     `;
     document.getElementById('saldoFormBox').style.display = 'none';
@@ -3536,11 +3544,8 @@ loadFiados();
       ⚙️ Admin
       <span id="pendingOrdersBadge" style="display:none;position:absolute;top:-6px;right:-6px;background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;border:2px solid var(--panel)"></span>
     </button>
-    <button class="account-btn" id="accountFab" onclick="openAccountQr()">
-      💳 <span class="account-btn-label">Pagar / Abonar</span>
-    </button>
-    <button class="account-btn" id="saldoFab" onclick="openSaldoModal()" style="background:linear-gradient(135deg,#9b59b6,#6e3a94)">
-      📒 <span class="account-btn-label">Mi saldo</span>
+    <button class="account-btn" id="accountFab" onclick="openSaldoModal()" style="background:linear-gradient(135deg,#9b59b6,#6e3a94)">
+      📒 <span class="account-btn-label">Saldo y Pagos</span>
     </button>
     <button class="btn btn-primary btn-sm" onclick="openCart()" id="cartBtn">
       🛒 Carrito <span class="cart-badge" id="cartCount">0</span>
@@ -4266,6 +4271,7 @@ loadFiados();
                text-transform:uppercase;padding:12px;border-radius:10px;border:1.5px solid #ddd;outline:none"
         onkeyup="if(event.key==='Enter')consultarSaldo()">
       <button class="qr-modal-whatsapp" style="background:#9b59b6" onclick="consultarSaldo()" id="saldoConsultarBtn">🔍 Consultar</button>
+      <button class="qr-modal-whatsapp" style="background:var(--gold);color:#111" onclick="irAPagarDesdeSaldo()">💳 Solo quiero ver el QR para pagar</button>
     </div>
 
     <div id="saldoResultBox" style="display:none;width:100%;flex-direction:column;gap:10px;align-items:center"></div>
