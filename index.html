@@ -21,7 +21,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import {
   getFirestore, collection, doc,
-  getDocs, addDoc, updateDoc, deleteDoc, onSnapshot,
+  getDocs, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot,
   query, orderBy, serverTimestamp, where,
   runTransaction, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
@@ -53,6 +53,12 @@ const COL_PEDIDOS   = 'pedidos';
 const COL_CREDITOS  = 'creditos';
 const COL_INGRESOS  = 'ingresos';
 const COL_FIADOS    = 'fiados';
+// Colección pública de "consulta de saldo": el documento se guarda con el
+// CÓDIGO SECRETO como ID. Las reglas de Firestore deben permitir "get" por ID
+// a cualquiera, pero JAMÁS "list" — así nadie puede listar todos los códigos,
+// solo consultar uno si ya lo conoce. El saldo se sincroniza desde el panel
+// admin (ver syncFiadoCodigoBalances) — nunca se expone la colección "creditos".
+const COL_FIADO_CODIGOS = 'fiadoCodigos';
 
 // ─── SEGURIDAD: escapar texto antes de insertarlo en HTML ──────
 // Todo dato que viene de Firestore (clientes, notas, productos) debe pasar por esc()
@@ -174,6 +180,11 @@ const AREA_PISO = {
 // real mediante loadFiados() — ya no se edita aquí en el código.
 let FIADOS = [];
 
+// Mapa nombre→{codigo,saldo,actualizado} de la colección fiadoCodigos.
+// Solo el admin puede leer esta colección completa (ver loadFiadoCodigos).
+let FIADO_CODIGOS_BY_NOMBRE = {};
+let lastSyncedSaldoByCodigo = {}; // evita escrituras repetidas si el saldo no cambió
+
 const DEMO_PRODUCTS = [
   { id:'d1', emoji:'🍫', nombre:'Chocolatina Jet',  precio:2000, costo:1200, stock:15, categoria:'Dulces'   },
   { id:'d2', emoji:'🍬', nombre:'Bon Bon Bum',       precio:500,  costo:250,  stock:40, categoria:'Dulces'   },
@@ -273,6 +284,7 @@ onAuthStateChanged(auth, user => {
   if (user) {
     adminLoggedIn = true;
     requestNotificationPermission();
+    loadFiadoCodigos();
     // Iniciar listeners en segundo plano siempre — así las alertas
     // funcionan aunque el admin esté viendo la tienda, no solo el panel
     startRealtimeListeners();
@@ -346,6 +358,52 @@ window.loadFiados = async function() {
 };
 
 // ═══════════════════════════════════════════════
+//  CÓDIGOS DE CONSULTA DE SALDO (solo admin)
+//  La colección fiadoCodigos solo es legible por completo (list) para el
+//  admin — el público solo puede hacer "get" de UN documento si ya conoce
+//  su ID (el código). Esto arma el mapa nombre→código para poder sincronizar
+//  el saldo y para mostrar/editar el código en el panel de Fiados.
+// ═══════════════════════════════════════════════
+async function loadFiadoCodigos() {
+  try {
+    const snap = await getDocs(collection(db, COL_FIADO_CODIGOS));
+    FIADO_CODIGOS_BY_NOMBRE = {};
+    snap.docs.forEach(d => {
+      const data = d.data();
+      FIADO_CODIGOS_BY_NOMBRE[data.cliente] = { codigo: d.id, saldo: data.saldo, actualizado: data.actualizado };
+      lastSyncedSaldoByCodigo[d.id] = data.saldo;
+    });
+  } catch(e) {
+    FIADO_CODIGOS_BY_NOMBRE = {};
+  }
+  syncFiadoCodigoBalances(); // por si algo quedó desactualizado desde la última sesión
+}
+
+// Recalcula el saldo de cada cliente con código asignado y lo refleja en su
+// documento público fiadoCodigos/{codigo}. Se llama cada vez que cambian los
+// créditos (mientras el admin tiene la pestaña abierta) y justo después de
+// asignar un código nuevo. Solo escribe si el saldo realmente cambió.
+async function syncFiadoCodigoBalances() {
+  const clients = getCreditsByClient();
+  const balanceByNombre = {};
+  clients.forEach(c => { balanceByNombre[c.cliente] = c.pedidos - c.abonos; });
+
+  const writes = [];
+  Object.entries(FIADO_CODIGOS_BY_NOMBRE).forEach(([nombre, info]) => {
+    const saldo = balanceByNombre[nombre] || 0;
+    if (lastSyncedSaldoByCodigo[info.codigo] === saldo) return; // sin cambios
+    const fiado = FIADOS.find(f => f.nombre === nombre);
+    writes.push(
+      setDoc(doc(db, COL_FIADO_CODIGOS, info.codigo), {
+        cliente: nombre, piso: fiado?.piso || '', area: fiado?.area || '',
+        saldo, actualizado: serverTimestamp()
+      }, { merge: true }).then(() => { lastSyncedSaldoByCodigo[info.codigo] = saldo; })
+    );
+  });
+  try { await Promise.all(writes); } catch(e) { /* se reintenta en el próximo cambio de créditos */ }
+}
+
+// ═══════════════════════════════════════════════
 //  TIEMPO REAL — onSnapshot reemplaza el polling
 //  Antes: setInterval(loadOrders, 30000)
 //  Ahora: onSnapshot detecta cambios al instante
@@ -370,6 +428,7 @@ function startRealtimeListeners() {
       renderCreditGrid();
       updateCreditStats();
     }
+    syncFiadoCodigoBalances();
   });
 }
 
@@ -1153,6 +1212,93 @@ window.closeQrModal = function() {
   document.getElementById('qrModalOverlay').classList.remove('open');
 };
 
+// ═══════════════════════════════════════════════
+//  CONSULTA PÚBLICA DE SALDO — módulo cliente
+//  Seguridad: no se usa el nombre (es público en la tienda) sino un código
+//  secreto de 8 caracteres que el admin le entrega a cada cliente. El código
+//  es el ID del documento en Firestore — las reglas solo permiten "get" por
+//  ID exacto, nunca "list", así que no hay forma de enumerar ni adivinar por
+//  fuerza bruta desde la app (y de todas formas se limita el ritmo de intentos
+//  aquí abajo, igual que en el login del admin).
+// ═══════════════════════════════════════════════
+const SALDO_MAX_ATTEMPTS = 5, SALDO_LOCKOUT_MS = 5 * 60 * 1000;
+function getSaldoLoginState() { try { return JSON.parse(localStorage.getItem('meka_saldo_state')||'{}'); } catch{return{};} }
+function setSaldoLoginState(s) { localStorage.setItem('meka_saldo_state', JSON.stringify(s)); }
+function isSaldoLockedOut() {
+  const s = getSaldoLoginState();
+  if (!s.lockedUntil) return false;
+  if (Date.now() < s.lockedUntil) return true;
+  setSaldoLoginState({}); return false;
+}
+function recordSaldoFailedAttempt() {
+  const s = getSaldoLoginState();
+  const attempts = (s.attempts||0)+1;
+  if (attempts >= SALDO_MAX_ATTEMPTS) setSaldoLoginState({ attempts, lockedUntil: Date.now()+SALDO_LOCKOUT_MS });
+  else setSaldoLoginState({ attempts });
+  return attempts;
+}
+
+window.openSaldoModal = function() {
+  document.getElementById('saldoCodigoInput').value = '';
+  document.getElementById('saldoFormBox').style.display = 'flex';
+  document.getElementById('saldoResultBox').style.display = 'none';
+  document.getElementById('saldoModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('saldoCodigoInput').focus(), 150);
+};
+window.closeSaldoModal = function() {
+  document.getElementById('saldoModalOverlay').classList.remove('open');
+};
+
+function tiempoDesde(ts) {
+  if (!ts?.toDate) return '';
+  const mins = Math.round((Date.now() - ts.toDate().getTime()) / 60000);
+  if (mins < 1)  return 'hace instantes';
+  if (mins < 60) return `hace ${mins} min`;
+  const horas = Math.round(mins/60);
+  if (horas < 24) return `hace ${horas} h`;
+  return `hace ${Math.round(horas/24)} d`;
+}
+
+window.consultarSaldo = async function() {
+  if (isSaldoLockedOut()) { toast('Demasiados intentos — espera unos minutos ⏳', 'error'); return; }
+  const codigo = document.getElementById('saldoCodigoInput').value.trim().toUpperCase();
+  if (!codigo) { toast('Ingresa tu código 👆', 'error'); return; }
+
+  const btn = document.getElementById('saldoConsultarBtn');
+  btn.disabled = true; btn.textContent = '⏳ Consultando...';
+
+  try {
+    const snap = await getDoc(doc(db, COL_FIADO_CODIGOS, codigo));
+    if (!snap.exists()) {
+      recordSaldoFailedAttempt();
+      toast('Código no válido — verifícalo con el administrador', 'error');
+      return;
+    }
+    clearLoginAttemptsSaldo();
+    const d = snap.data();
+    const saldo = Number(d.saldo)||0;
+    let msg, color;
+    if (saldo < 0) { msg = `💚 Tienes saldo a favor de ${fmtPrice(Math.abs(saldo))}`; color = 'var(--success, #2ecc71)'; }
+    else if (saldo === 0) { msg = '✅ Estás al día — no debes nada'; color = 'var(--success, #2ecc71)'; }
+    else { msg = `Debes ${fmtPrice(saldo)}`; color = saldo >= TOPE_FIADO ? '#e94560' : '#f5a623'; }
+
+    document.getElementById('saldoResultBox').innerHTML = `
+      <div style="font-size:1rem;font-weight:700;color:#333">${esc(d.cliente)}</div>
+      <div style="font-size:1.5rem;font-weight:800;font-family:Poppins,sans-serif;color:${color}">${msg}</div>
+      ${saldo >= TOPE_FIADO ? '<div style="font-size:0.8rem;background:#fdecee;color:#e94560;padding:8px 12px;border-radius:10px;text-align:center">⚠️ Alcanzaste el tope de fiado ($'+TOPE_FIADO.toLocaleString('es-CO')+'). Abona pronto para seguir pidiendo fiado.</div>' : ''}
+      <div style="font-size:0.72rem;color:#999">Actualizado ${tiempoDesde(d.actualizado)}</div>
+      <button class="qr-modal-whatsapp" style="background:#9b59b6" onclick="document.getElementById('saldoFormBox').style.display='flex';document.getElementById('saldoResultBox').style.display='none';document.getElementById('saldoCodigoInput').value=''">🔁 Consultar otro código</button>
+    `;
+    document.getElementById('saldoFormBox').style.display = 'none';
+    document.getElementById('saldoResultBox').style.display = 'flex';
+  } catch(e) {
+    toast('No se pudo consultar — intenta de nuevo', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '🔍 Consultar';
+  }
+};
+function clearLoginAttemptsSaldo() { setSaldoLoginState({}); }
+
 window.autoFillFiado = function(nombre) {
   const f=FIADOS.find(x=>x.nombre===nombre); if(!f) return;
   document.getElementById('fPiso').value=f.piso;
@@ -1855,8 +2001,12 @@ function catCutout(img) {
     const x = c.getContext('2d', { willReadFrequently: true });
     x.drawImage(img, 0, 0);
     const im = x.getImageData(0, 0, w, h), d = im.data;
-    const isBg = i => d[i+3] < 20 || (d[i] >= 228 && d[i+1] >= 228 && d[i+2] >= 228 &&
-                      Math.max(d[i], d[i+1], d[i+2]) - Math.min(d[i], d[i+1], d[i+2]) < 22);
+    // Fondo blanco (foto con fondo blanco de verdad) O fondo negro (Drive aplana a negro
+    // la transparencia de un PNG sin fondo al convertirlo a la miniatura JPEG que descargamos).
+    const isBg = i => d[i+3] < 20 ||
+      (d[i] >= 228 && d[i+1] >= 228 && d[i+2] >= 228 &&
+        Math.max(d[i], d[i+1], d[i+2]) - Math.min(d[i], d[i+1], d[i+2]) < 22) ||
+      (d[i] <= 16 && d[i+1] <= 16 && d[i+2] <= 16);
     const bg = new Uint8Array(w * h), stack = [];
     const push = (px, py) => { if (px<0||py<0||px>=w||py>=h) return; const k = py*w+px;
       if (!bg[k] && isBg(k*4)) { bg[k] = 1; stack.push(k); } };
@@ -2182,7 +2332,7 @@ window.renderFiadosList = function() {
 
   tbody.innerHTML = filtered.map(f => `
     <tr>
-      <td><strong>${esc(f.nombre)}</strong></td>
+      <td><strong>${esc(f.nombre)}</strong>${FIADO_CODIGOS_BY_NOMBRE[f.nombre]?' <span title="Tiene código de consulta de saldo">🔑</span>':''}</td>
       <td>${esc(f.piso)}</td>
       <td>${esc(f.area)}</td>
       <td><button class="btn btn-outline btn-sm" onclick="openFiadoModal('${f.id}')">✏️ Editar</button></td>
@@ -2195,6 +2345,13 @@ window.autoFillFiadoModalPiso = function(area) {
   document.getElementById('fiPiso').placeholder = piso ? '' : 'Elige un área';
 };
 
+function refreshFiCodigoUI(nombre) {
+  const info = nombre ? FIADO_CODIGOS_BY_NOMBRE[nombre] : null;
+  document.getElementById('fiCodigo').value = info ? info.codigo : '';
+  document.getElementById('fiCodigo').placeholder = info ? '' : 'Sin asignar';
+  document.getElementById('fiCodigoCopyBtn').style.display = info ? 'inline-flex' : 'none';
+}
+
 window.openFiadoModal = function(fiadoId) {
   const deleteBtn = document.getElementById('fiadoDeleteBtn');
   const submitBtn = document.getElementById('fiadoSubmitBtn');
@@ -2206,6 +2363,7 @@ window.openFiadoModal = function(fiadoId) {
     document.getElementById('fiNombre').value = activeFiado.nombre;
     document.getElementById('fiArea').value = activeFiado.area;
     document.getElementById('fiPiso').value = activeFiado.piso;
+    refreshFiCodigoUI(activeFiado.nombre);
     submitBtn.textContent = '💾 Guardar cambios';
     deleteBtn.style.display = 'block';
   } else {
@@ -2215,10 +2373,53 @@ window.openFiadoModal = function(fiadoId) {
     document.getElementById('fiArea').value = '';
     document.getElementById('fiPiso').value = '';
     document.getElementById('fiPiso').placeholder = 'Elige un área';
+    refreshFiCodigoUI(null);
     submitBtn.textContent = '➕ Crear fiado';
     deleteBtn.style.display = 'none';
   }
   document.getElementById('fiadoModalOverlay').classList.add('open');
+};
+
+// Código aleatorio de 8 caracteres (letras mayúsculas + números) — suficientemente
+// largo para que adivinarlo no sea práctico (36^8 ≈ 2.8 billones de combinaciones).
+function randCodigoFiado() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I para evitar confusiones al dictarlo
+  let s = '';
+  for (let i = 0; i < 8; i++) s += abc[Math.floor(Math.random() * abc.length)];
+  return s;
+}
+
+window.generarCodigoFiado = async function() {
+  const nombre = document.getElementById('fiNombre').value.trim();
+  const area   = document.getElementById('fiArea').value;
+  const piso   = document.getElementById('fiPiso').value;
+  if (!nombre) { toast('Escribe primero el nombre 👆', 'error'); return; }
+  if (!area)   { toast('Selecciona primero un área 👆', 'error'); return; }
+
+  const prevInfo = FIADO_CODIGOS_BY_NOMBRE[nombre];
+  const nuevoCodigo = randCodigoFiado();
+  const balance = getCreditsByClient().find(c => c.cliente === nombre);
+  const saldo = balance ? balance.pedidos - balance.abonos : 0;
+
+  try {
+    if (prevInfo) await deleteDoc(doc(db, COL_FIADO_CODIGOS, prevInfo.codigo));
+    await setDoc(doc(db, COL_FIADO_CODIGOS, nuevoCodigo), {
+      cliente: nombre, piso, area, saldo, actualizado: serverTimestamp()
+    });
+    FIADO_CODIGOS_BY_NOMBRE[nombre] = { codigo: nuevoCodigo, saldo };
+    lastSyncedSaldoByCodigo[nuevoCodigo] = saldo;
+    refreshFiCodigoUI(nombre);
+    toast('🎲 Código generado — cópialo y envíaselo', 'success');
+  } catch(e) {
+    toast('Error al generar el código', 'error');
+  }
+};
+
+window.copiarCodigoFiado = function() {
+  const codigo = document.getElementById('fiCodigo').value;
+  if (!codigo) return;
+  navigator.clipboard?.writeText(codigo).then(() => toast('📋 Código copiado', 'success'))
+    .catch(() => toast('No se pudo copiar', 'error'));
 };
 
 window.closeFiadoModal = function() {
@@ -2244,8 +2445,16 @@ window.submitFiado = async function() {
   try {
     const docData = { nombre, area, piso };
     if (activeFiado) {
+      const nombreAnterior = activeFiado.nombre;
       await updateDoc(doc(db, COL_FIADOS, activeFiado.id), docData);
       Object.assign(activeFiado, docData);
+      // Si tenía código asignado, mantener su registro al día (piso/área/nombre)
+      const info = FIADO_CODIGOS_BY_NOMBRE[nombreAnterior];
+      if (info) {
+        await setDoc(doc(db, COL_FIADO_CODIGOS, info.codigo), { cliente: nombre, piso, area }, { merge: true });
+        if (nombreAnterior !== nombre) { delete FIADO_CODIGOS_BY_NOMBRE[nombreAnterior]; }
+        FIADO_CODIGOS_BY_NOMBRE[nombre] = info;
+      }
       toast(`✅ ${nombre} actualizado`, 'success');
     } else {
       const ref = await addDoc(collection(db, COL_FIADOS), docData);
@@ -2270,6 +2479,11 @@ window.confirmDeleteFiado = async function() {
   try {
     await deleteDoc(doc(db, COL_FIADOS, activeFiado.id));
     FIADOS = FIADOS.filter(f => f.id !== activeFiado.id);
+    const info = FIADO_CODIGOS_BY_NOMBRE[nombre];
+    if (info) {
+      await deleteDoc(doc(db, COL_FIADO_CODIGOS, info.codigo));
+      delete FIADO_CODIGOS_BY_NOMBRE[nombre];
+    }
     toast(`🗑️ ${nombre} eliminado de fiados`, 'success');
     closeFiadoModal();
     window.renderFiadosList();
@@ -2636,6 +2850,9 @@ loadFiados();
   @media (max-width: 480px) {
     .account-btn { padding: 8px 12px; font-size: 0.76rem; }
     .account-btn .account-btn-label { display: none; }
+    /* 4 botones en el header ya no caben en una sola fila en celular */
+    header { flex-wrap: wrap; height: auto; padding: 10px 16px; row-gap: 8px; }
+    .header-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   }
   /* Caption + copiar dentro del modal QR */
   .qr-modal-box .qr-caption-row {
@@ -3322,6 +3539,9 @@ loadFiados();
     <button class="account-btn" id="accountFab" onclick="openAccountQr()">
       💳 <span class="account-btn-label">Pagar / Abonar</span>
     </button>
+    <button class="account-btn" id="saldoFab" onclick="openSaldoModal()" style="background:linear-gradient(135deg,#9b59b6,#6e3a94)">
+      📒 <span class="account-btn-label">Mi saldo</span>
+    </button>
     <button class="btn btn-primary btn-sm" onclick="openCart()" id="cartBtn">
       🛒 Carrito <span class="cart-badge" id="cartCount">0</span>
     </button>
@@ -3954,6 +4174,16 @@ loadFiados();
             <input type="text" id="fiPiso" placeholder="Elige un área" readonly style="background:var(--bg);cursor:not-allowed">
           </div>
         </div>
+        <div class="form-group" style="margin:0">
+          <label>Código de consulta de saldo <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="fiCodigo" placeholder="Sin asignar" readonly
+              style="background:var(--bg);cursor:not-allowed;letter-spacing:2px;font-family:monospace;font-weight:700">
+            <button type="button" class="btn btn-outline btn-sm" onclick="generarCodigoFiado()" style="white-space:nowrap">🎲 Generar</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="copiarCodigoFiado()" id="fiCodigoCopyBtn" style="display:none;white-space:nowrap">📋</button>
+          </div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-top:4px">Compártelo por WhatsApp — con este código el cliente consulta su saldo en "📒 Mi saldo" en la tienda, sin que nadie más pueda verlo.</div>
+        </div>
         <button class="btn btn-gold" onclick="submitFiado()" style="width:100%;padding:11px" id="fiadoSubmitBtn">➕ Crear fiado</button>
         <button class="btn btn-outline btn-sm" style="width:100%;border-color:var(--accent);color:var(--accent);display:none" id="fiadoDeleteBtn" onclick="confirmDeleteFiado()">🗑️ Eliminar fiado</button>
       </div>
@@ -4017,6 +4247,30 @@ loadFiados();
     <button class="qr-modal-whatsapp" onclick="openWhatsAppProof()">💬 Enviar comprobante por WhatsApp</button>
     <div style="font-size:0.72rem;color:#888;text-align:center">Esto es solo informativo — no es obligatorio</div>
     <button class="qr-modal-close" onclick="closeQrModal()">Cerrar</button>
+  </div>
+</div>
+
+        <!-- ===== MODAL CONSULTA DE SALDO (público) ===== -->
+<div class="qr-modal-overlay" id="saldoModalOverlay" onclick="if(event.target===this)closeSaldoModal()">
+  <div class="qr-modal-box" style="max-width:360px">
+    <div style="font-size:2.2rem">📒</div>
+    <div class="qr-caption" style="font-size:1.05rem">Consulta tu saldo</div>
+    <div style="font-size:0.8rem;color:#666;text-align:center;margin-top:-6px">
+      Ingresa el código que te dio el administrador de la tienda. Es personal — no lo compartas.
+    </div>
+
+    <div id="saldoFormBox" style="width:100%;display:flex;flex-direction:column;gap:10px">
+      <input type="text" id="saldoCodigoInput" maxlength="8" placeholder="EJ: 7KXQ9PRT"
+        autocomplete="off" autocapitalize="characters"
+        style="width:100%;box-sizing:border-box;text-align:center;letter-spacing:4px;font-family:monospace;font-weight:700;font-size:1.1rem;
+               text-transform:uppercase;padding:12px;border-radius:10px;border:1.5px solid #ddd;outline:none"
+        onkeyup="if(event.key==='Enter')consultarSaldo()">
+      <button class="qr-modal-whatsapp" style="background:#9b59b6" onclick="consultarSaldo()" id="saldoConsultarBtn">🔍 Consultar</button>
+    </div>
+
+    <div id="saldoResultBox" style="display:none;width:100%;flex-direction:column;gap:10px;align-items:center"></div>
+
+    <button class="qr-modal-close" onclick="closeSaldoModal()">Cerrar</button>
   </div>
 </div>
 
